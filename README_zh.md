@@ -215,6 +215,30 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 
 后台 subagent 以持久 Claude 会话方式运行（`claude --session-id`）。你可以随时打开新终端运行 `claude --resume <session_uuid>` 查看进度。
 
+### 权限与安全模型
+
+后台 subagent 使用 `--permission-mode bypassPermissions` 而非 `auto`。这是必要的，因为：
+
+- `auto` 模式依赖内部安全分类器模型，该模型可能临时不可用，导致所有工具调用被阻塞，subagent 完全卡住
+- 后台 subagent 无法交互式地向用户请求权限
+- subagent 执行的是有边界的、用户主动发起的任务，提示词范围明确
+
+为补偿跳过平台级安全检查，subagent 提示词内置了**强制路径限制**：
+
+- 文件只能写入 `.omc/reflections/{id}/` 和用户记忆目录
+- 禁止执行破坏性命令（`rm -rf`、`git push --force` 等）
+- 禁止修改 `.git/`、`CLAUDE.md` 或配置文件
+
+### 错误处理
+
+如果后台 subagent 失败，技能会分类错误并提供相应的恢复选项：
+
+| 错误类型 | 检测模式 | 恢复方式 |
+|---------|---------|---------|
+| API 连接问题 | `ECONNRESET`、`timeout` | 使用新会话重试 |
+| 速率限制 | `rate limit`、`429` | 等待后重试 |
+| 平台问题 | 其他失败 | 内联执行回退或放弃 |
+
 ### 三种模式
 
 | 命令 | 何时使用 | 发生什么 |
@@ -251,8 +275,10 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 - **纠正信号分类**（Step 2.1）：遇到新模式时补充
 - **根因类别**：7 类分类法可根据你的领域调整
 - **Subagent 提示词**（SUBAGENT_PROMPT 内）：调整 RCA 深度、添加领域特定指导
-- **草拟文档模板**：自定义记忆文档格式以适配你的工作流
+- **草拟文档模板**（ Write 工具写入包含 backtick 的 markdown 文件可能产生乱码，建议用 Bash heredoc 替代）
 - **严重度阈值**：调整 Critical / Important / Minor 的判定标准
+- **Subagent 会话重试**：session ID 冲突时需要重新生成 UUID 并清理旧状态)
+- **多步骤原子性**（subagent 启动流程含 mkdir、state.json、prompt 写入、claude -p 多个步骤，需确保全部完成后才能响应用户消息）
 
 ### 测试改动
 
@@ -270,6 +296,9 @@ cat skills/reflect/tests/TEST_PLAN.md
 - 新的纠正信号模式（特别是非英语的）
 - 结合真实案例调整的根因分类
 - 能产生更好 RCA 的 subagent 提示词改进
+- Subagent 会话重试时的 session ID 冲突处理
+- 多步骤原子性在 subagent 启动流程中确保所有步骤完成后才响应用户
+- Write 工具备选：写入反馈记忆文件时如遇到乱码，使用 Bash heredoc 作为替代方案
 
 ## 开发
 
