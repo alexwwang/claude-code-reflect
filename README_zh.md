@@ -215,6 +215,30 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 
 后台 subagent 以持久 Claude 会话方式运行（`claude --session-id`）。你可以随时打开新终端运行 `claude --resume <session_uuid>` 查看进度。
 
+### 权限与安全模型
+
+后台 subagent 使用 `--permission-mode bypassPermissions` 而非 `auto`。这是必要的，因为：
+
+- `auto` 模式依赖内部安全分类器模型，该模型可能临时不可用，导致所有工具调用被阻塞，subagent 完全卡住
+- 后台 subagent 无法交互式地向用户请求权限
+- subagent 执行的是有边界的、用户主动发起的任务，提示词范围明确
+
+为补偿跳过平台级安全检查，subagent 提示词内置了**强制路径限制**：
+
+- 文件只能写入 `.reflect/reflections/{id}/` 和用户记忆目录
+- 禁止执行破坏性命令（`rm -rf`、`git push --force` 等）
+- 禁止修改 `.git/`、`CLAUDE.md` 或配置文件
+
+### 错误处理
+
+如果后台 subagent 失败，技能会分类错误并提供相应的恢复选项：
+
+| 错误类型 | 检测模式 | 恢复方式 |
+|---------|---------|---------|
+| API 连接问题 | `ECONNRESET`、`timeout` | 使用新会话重试 |
+| 速率限制 | `rate limit`、`429` | 等待后重试 |
+| 平台问题 | 其他失败 | 内联执行回退或放弃 |
+
 ### 三种模式
 
 | 命令 | 何时使用 | 发生什么 |

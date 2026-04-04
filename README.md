@@ -218,6 +218,30 @@ Turn 2+: User runs /reflect review ref-xxxx -> sees RCA + drafts -> approves -> 
 
 The background subagent runs as a persistent Claude session (`claude --session-id`). You can inspect progress at any time by opening a new terminal and running `claude --resume <session_uuid>`.
 
+### Permission & Safety Model
+
+The background subagent runs with `--permission-mode bypassPermissions` instead of `auto`. This is necessary because:
+
+- `auto` mode depends on an internal safety classifier model that can be temporarily unavailable, which would block ALL tool calls and leave the subagent stuck
+- Background subagents cannot prompt the user interactively for permissions
+- The subagent runs a bounded, user-initiated task with a tightly-scoped prompt
+
+To compensate for bypassing platform-level safety checks, the subagent prompt includes **mandatory path restrictions**:
+
+- Files may ONLY be written to `.reflect/reflections/{id}/` and user memory directories
+- Destructive commands (`rm -rf`, `git push --force`, etc.) are forbidden
+- Modifying `.git/`, `CLAUDE.md`, or config files is forbidden
+
+### Error Handling
+
+If the background subagent fails, the skill classifies the error and offers appropriate recovery options:
+
+| Error Type | Detection Pattern | Recovery |
+|------------|-------------------|----------|
+| API connectivity | `ECONNRESET`, `timeout` | Retry with new session |
+| Rate limit | `rate limit`, `429` | Wait and retry |
+| Platform issue | Any other failure | Inline fallback or discard |
+
 ### The Three Modes
 
 | Command | When to Use | What Happens |
