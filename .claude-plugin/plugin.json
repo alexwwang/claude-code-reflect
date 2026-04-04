@@ -1,0 +1,18 @@
+{
+  "name": "claude-code-reflect",
+  "version": "0.1.0",
+  "description": "Correction-triggered root cause analysis and memory artifact generation for Claude Code (requires oh-my-claudecode)",
+  "author": {
+    "name": "alexwwang"
+  },
+  "repository": "https://github.com/alexwwang/claude-code-reflect",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "reflection",
+    "rca",
+    "memory"
+  ],
+  "skills": "./skills/"
+}
