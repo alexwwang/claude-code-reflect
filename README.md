@@ -1,5 +1,7 @@
 # claude-code-reflect
 
+> *"Knowing yourself is the beginning of all wisdom." — Aristotle*
+
 [中文文档](README_zh.md)
 
 A Claude Code plugin that detects when you correct the model, performs root cause analysis in the background, and drafts memory artifacts for your approval.

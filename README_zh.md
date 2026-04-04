@@ -1,5 +1,7 @@
 # claude-code-reflect
 
+> *"认识自己，是一切智慧的开端。" — 亚里士多德*
+
 [English](README.md)
 
 一个 Claude Code 插件，在你纠正模型错误时自动检测、后台执行根因分析，并草拟记忆文档等你审批。
