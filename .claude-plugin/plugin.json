@@ -1,7 +1,7 @@
 {
   "name": "claude-code-reflect",
   "version": "0.1.0",
-  "description": "Correction-triggered root cause analysis and memory artifact generation for Claude Code (requires oh-my-claudecode)",
+  "description": "Correction-triggered root cause analysis and memory artifact generation for Claude Code (standalone, no OMC required)",
   "author": {
     "name": "alexwwang"
   },

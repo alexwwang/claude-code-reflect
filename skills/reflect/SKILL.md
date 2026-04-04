@@ -22,8 +22,8 @@ Reflect fills the gap between `learner` (extracts reusable skills) and `remember
 - Normal discussion disagreement (not a factual error)
 - User is testing or probing
 - No error has occurred
-- User wants to extract a reusable skill (use `/learner` directly)
-- User wants to organize existing knowledge (use `/remember` directly)
+- User wants to extract a reusable skill (write directly to `.reflect/skills/`)
+- User wants to organize existing knowledge (write directly to `.reflect/project-memory.json`)
 </Do_Not_Use_When>
 
 <Why_This_Exists>
@@ -40,7 +40,7 @@ The existing `learner` skill detects problem-solution patterns but does not spec
 - Phase 2 (reflection): Delegate to background Claude session (`--session-id`), user can inspect via `claude --resume`
 - Phase 3 (review): User-initiated via `/reflect review <id>`, lightweight read + display
 - Memory artifacts are written to final locations ONLY after user approval
-- All drafts saved to `.omc/reflections/{id}/` until approved
+- All drafts saved to `.reflect/reflections/{id}/` until approved
 </Execution_Policy>
 
 <Steps>
@@ -94,7 +94,7 @@ Launch a background subagent as a persistent Claude session. The session is save
 ### 3.1 Prepare
 
 1. Generate a UUID for the subagent session. Use `uuidgen` via Bash.
-2. Create the reflections directory: `mkdir -p {project_root}/.omc/reflections/{reflection_id}`
+2. Create the reflections directory: `mkdir -p {project_root}/.reflect/reflections/{reflection_id}`
 3. Initialize `state.json` with `status: "running"` and the session ID:
 
 ```json
@@ -222,7 +222,7 @@ Draft artifacts based on severity. Do NOT write to final locations. Save everyth
 
 ### C1: Reflection Report (required for all severities)
 
-Save to: `{project_root}/.omc/reflections/{reflection_id}/report.md`
+Save to: `{project_root}/.reflect/reflections/{reflection_id}/report.md`
 
 Use this exact format:
 
@@ -275,17 +275,19 @@ type: feedback
 **All severities** get at least Draft 1 (Claude Code feedback memory).
 
 **Important+ severity** also drafts:
-- A `project_memory_add_note` entry (project-level factual note)
+- A project-level factual note to `.reflect/project-memory.json`
 
 **Critical severity** also drafts:
-- A `notepad_write_priority` entry (high-priority session note)
+- A high-priority session note to `.reflect/notifications.md`
 
-**If the correction reveals a reusable, non-Googleable, codebase-specific pattern** (test against learner's quality gate: Could someone Google this in 5 minutes? No. Is this specific to THIS codebase? Yes. Did this take real debugging effort? Yes.), also draft:
-- An OMC learned skill file for `.omc/skills/{skill-name}.md`
+**If the correction reveals a reusable, non-Googleable, codebase-specific pattern** (quality gate: Could someone Google this in 5 minutes? No. Is this specific to THIS codebase? Yes. Did this take real debugging effort? Yes.), also draft:
+- A learned skill file for `.reflect/skills/{skill-name}.md`
+
+
 
 ## Task D: Save State and Inject Notification
 
-1. Write state file to `{project_root}/.omc/reflections/{reflection_id}/state.json`:
+1. Write state file to `{project_root}/.reflect/reflections/{reflection_id}/state.json`:
 ```json
 {
   "id": "{reflection_id}",
@@ -299,7 +301,7 @@ type: feedback
 }
 ```
 
-2. Use the `notepad_write_priority` MCP tool to inject a persistent notification:
+2. Use the Write tool to write a persistent notification to `.reflect/notifications.md`:
 ```
 [Reflection complete ID:{reflection_id}] Root cause: {category} | Severity: {severity} | Enter /oh-my-claudecode:reflect review {reflection_id} to review drafts and approve memory artifacts
 ```
@@ -310,7 +312,7 @@ type: feedback
 
 </SUBAGENT_PROMPT>
 
-After launching the subagent, respond to the user normally in the main conversation. The subagent runs independently. When it completes, a `<task-notification>` will appear automatically. The notepad priority notification ensures the review prompt survives context compaction.
+After launching the subagent, respond to the user normally in the main conversation. The subagent runs independently. When it completes, a `<task-notification>` will appear automatically. The notification file in `.reflect/notifications.md` ensures the review prompt can be found later.
 
 ## Step 4: Review Mode (User-Initiated)
 
@@ -318,9 +320,9 @@ When the user invokes `/oh-my-claudecode:reflect review <id>` or mentions review
 
 ### 4.1 Load Reflection
 
-Read `{project_root}/.omc/reflections/{id}/report.md`
+Read `{project_root}/.reflect/reflections/{id}/report.md`
 
-If the file does not exist, inform the user and suggest checking the ID. List available reflections by scanning `.omc/reflections/*/state.json`.
+If the file does not exist, inform the user and suggest checking the ID. List available reflections by scanning `.reflect/reflections/*/state.json`.
 
 ### 4.2 Display Results
 
@@ -349,17 +351,17 @@ After user approval, write each approved draft to its final location:
 | Draft Type | Write Method | Final Location |
 |------------|-------------|----------------|
 | Claude Code feedback memory | Write tool | `~/.claude/projects/{project}/memory/feedback_{topic}.md` |
-| Project memory note | `project_memory_add_note` MCP | `.omc/project-memory.json` |
-| Project memory directive | `project_memory_add_directive` MCP | `.omc/project-memory.json` |
-| High-priority notepad entry | `notepad_write_priority` MCP | `.omc/notepad.md` |
-| OMC learned skill | Write tool | `.omc/skills/{skill-name}.md` |
+| Project memory note | Write tool | `.reflect/project-memory.json` |
+| Project memory directive | Write tool | `.reflect/project-memory.json` |
+| High-priority notification | Write tool | `.reflect/notifications.md` |
+| Learned skill | Write tool | `.reflect/skills/{skill-name}.md` |
 
 If a Claude Code feedback memory was written, also update `MEMORY.md` index in the same memory directory with a pointer to the new file.
 
 ### Cleanup
 
 1. Update `state.json` status to `"approved"` or `"approved_with_modifications"`
-2. Use `notepad_write_priority` to remove or update the review notification (replace with a brief "Reflection {id} artifacts committed" note)
+2. Use the Write tool to remove or update the review notification (replace with a brief "Reflection {id} artifacts committed" note)
 3. Do NOT delete the report.md — it serves as a historical record
 
 </Steps>
@@ -368,7 +370,7 @@ If a Claude Code feedback memory was written, also update `MEMORY.md` index in t
 ```bash
 # Step 3.1: Generate session UUID and initialize state
 SESSION_ID=$(uuidgen)
-mkdir -p {project_root}/.omc/reflections/{reflection_id}
+mkdir -p {project_root}/.reflect/reflections/{reflection_id}
 # Write state.json with status: "running" and session_id
 
 # Step 3.2: Write prompt to temp file (use /c/tmp/ on Windows)
@@ -390,15 +392,15 @@ cat /c/tmp/reflect-{reflection_id}-stderr.log
 
 ```python
 # Step 4: Read reflection report
-Read(file_path=".omc/reflections/{id}/report.md")
-Read(file_path=".omc/reflections/{id}/state.json")
+Read(file_path=".reflect/reflections/{id}/report.md")
+Read(file_path=".reflect/reflections/{id}/state.json")
 
 # Step 5: Write approved artifacts
 Write(file_path="~/.claude/projects/{project}/memory/feedback_{topic}.md", content=...)
 Edit(file_path="~/.claude/projects/{project}/memory/MEMORY.md", ...)
-project_memory_add_note(content=...)
-project_memory_add_directive(directive=...)
-notepad_write_priority(content=...)
+Write(file_path=".reflect/project-memory.json", content=...)
+Write(file_path=".reflect/project-memory.json", content=...)
+Write(file_path=".reflect/notifications.md", content=...)
 ```
 </Tool_Usage>
 
@@ -493,7 +495,7 @@ Why bad: User and main agent are blind to subagent state. Cannot distinguish "st
 - If the reflection report file does not exist when reviewing, list available reflections and ask the user to pick one
 - If the user provides contradictory feedback across multiple review rounds, ask for clarification before proceeding
 - If the subagent fails 3 times in a row, report the issue to the user and suggest running `/reflect` manually with explicit context
-- If `.omc/reflections/` accumulates more than 20 pending reflections, suggest the user review or clean up old ones
+- If `.reflect/reflections/` accumulates more than 20 pending reflections, suggest the user review or clean up old ones
 - If the subagent appears stuck, the user can inspect via `/reflect inspect <id>` or `claude --resume <session_uuid>`
 </Escalation_And_Stop_Conditions>
 
@@ -501,32 +503,33 @@ Why bad: User and main agent are blind to subagent state. Cannot distinguish "st
 - [ ] Correction signal detected from conversation (or user provided explicit context)
 - [ ] Session UUID generated and saved to state.json
 - [ ] Background Claude session launched with --session-id and --permission-mode auto
-- [ ] Reflection report saved to `.omc/reflections/{id}/report.md`
+- [ ] Reflection report saved to `.reflect/reflections/{id}/report.md`
 - [ ] State file updated to `pending_review`
-- [ ] Notepad priority notification injected with review instructions
+- [ ] Notification file written to `.reflect/notifications.md` with review instructions
 - [ ] User reviewed reflection report
 - [ ] User approved artifacts (or approved with modifications)
 - [ ] All approved artifacts written to final locations
 - [ ] MEMORY.md index updated if feedback memory was written
 - [ ] State file updated to `approved`
-- [ ] Review notification cleaned up from notepad
+- [ ] Review notification cleaned up from `.reflect/notifications.md`
 </Final_Checklist>
 
 <Advanced>
 ## Integration with Other Skills
 
-| Scenario | Delegate to | Reason |
-|----------|------------|--------|
-| Correction reveals a reusable non-Googleable pattern | `/learner` | Learner has quality gate validation |
-| Multiple artifacts need classification | `/remember` | Remember classifies by memory surface |
-| Correction reveals a repeatable workflow | `/skillify` | Skillify creates formal skill drafts |
-| Simple single artifact write | Direct MCP tool call | Faster path, no delegation overhead |
+This standalone version does not delegate to OMC skills. All artifact writing is done directly with the Write tool.
+
+| Scenario | Action | Reason |
+|----------|--------|--------|
+| Correction reveals a reusable pattern | Write to `.reflect/skills/` | Direct file write, no quality gate |
+| Multiple artifacts needed | Write each to its target path | No classification, all direct writes |
+| Simple single artifact write | Direct Write tool call | Faster path, no delegation overhead |
 
 ## Debugging Guide
 
 When a background subagent fails or appears stuck:
 
-1. **Check state**: Read `.omc/reflections/{id}/state.json` — is status "running"?
+1. **Check state**: Read `.reflect/reflections/{id}/state.json` — is status "running"?
 2. **Resume session**: `claude --resume {session_uuid}` — see the subagent's full conversation
 3. **Check stderr**: `cat /c/tmp/reflect-{id}-stderr.log` — API errors, permission issues
 4. **Check partial output**: Does `report.md` exist? Is it complete or truncated?
