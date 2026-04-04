@@ -260,6 +260,46 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 
 > **注意：** 本文档中的示例路径使用 main 分支的 `.omc/` 目录（如 `.omc/reflections/`）。在 standalone 分支上，所有数据存储在 `.reflect/` 目录下（如 `.reflect/reflections/`、`.reflect/notifications.md`、`.reflect/project-memory.json`）。
 
+## 待改善项
+
+以下问题在实际测试中发现，待后续改进。
+
+1. **多步流程缺乏原子性保护**
+
+   首次调用 `/reflect` 时，准备阶段（UUID 生成、mkdir、prompt 写入、subagent 启动）涉及多个顺序步骤。如果用户在流程中途插入新请求，整个过程可能被静默放弃，subagent 始终未启动。
+
+   *改进方向：* 将准备阶段合并为单次原子操作，或设置不可中断保护，确保所有步骤完成后才能响应用户。
+
+2. **Subagent 模型配置缺失**
+
+   启动 subagent 的 `claude -p` 命令未指定模型参数，可能使用默认模型而非主 session 的当前模型。
+
+   *改进方向：* SKILL.md 中应指导从主 session 获取当前模型 ID，通过 `--model` 参数传递给 subagent。
+
+3. **重试时 Session ID 冲突**
+
+   subagent 启动失败后重试时，可能复用已注册的 session UUID，导致 `claude --resume` 行为不确定。
+
+   *改进方向：* 每次重试（包括 `--deep` 重分析）必须生成新的 UUID，并在 `state.json` 中更新。
+
+4. **Read 工具渲染与实际文件内容不一致**
+
+   验证含 markdown 语法的文件（尤其是反引号代码块）时，Read 工具可能因嵌套 markdown 解析而渲染异常。磁盘上的实际文件内容是正确的——这是显示问题，不是数据损坏。
+
+   *改进方向：* SKILL.md 中应提醒 subagent，验证含 markdown 语法的文件时使用 `Bash cat` 而非 Read 工具。
+
+5. **错误恢复选项不充分**
+
+   subagent 启动失败后，当前选项为"重试/内联回退/放弃"，未覆盖部分文件已写入的中间状态（如 `report.md` 已存在但 `state.json` 未更新）。
+
+   *改进方向：* 增加"检查部分结果"选项，检测并利用已存在的部分文件继续完成操作。
+
+6. **跨 Compaction 通知可靠性**
+
+   standalone 分支使用文件写入（`.reflect/notifications.md`）替代 OMC MCP 工具。文件通知无法在 context compaction 后自动注入上下文。
+
+   *改进方向：* 考虑在 SKILL.md 中增加 post-compaction 检查机制（如读取 `state.json` 扫描 `pending_review` 状态）。
+
 ## 迭代改进
 
 本技能设计为通过实际使用不断迭代改进。推荐的工作流：
@@ -275,10 +315,8 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 - **纠正信号分类**（Step 2.1）：遇到新模式时补充
 - **根因类别**：7 类分类法可根据你的领域调整
 - **Subagent 提示词**（SUBAGENT_PROMPT 内）：调整 RCA 深度、添加领域特定指导
-- **草拟文档模板**（ Write 工具写入包含 backtick 的 markdown 文件可能产生乱码，建议用 Bash heredoc 替代）
+- **草拟文档模板**：自定义记忆文档格式以适配你的工作流
 - **严重度阈值**：调整 Critical / Important / Minor 的判定标准
-- **Subagent 会话重试**：session ID 冲突时需要重新生成 UUID 并清理旧状态)
-- **多步骤原子性**（subagent 启动流程含 mkdir、state.json、prompt 写入、claude -p 多个步骤，需确保全部完成后才能响应用户消息）
 
 ### 测试改动
 
@@ -296,9 +334,6 @@ cat skills/reflect/tests/TEST_PLAN.md
 - 新的纠正信号模式（特别是非英语的）
 - 结合真实案例调整的根因分类
 - 能产生更好 RCA 的 subagent 提示词改进
-- Subagent 会话重试时的 session ID 冲突处理
-- 多步骤原子性在 subagent 启动流程中确保所有步骤完成后才响应用户
-- Write 工具备选：写入反馈记忆文件时如遇到乱码，使用 Bash heredoc 作为替代方案
 
 ## 开发
 

@@ -263,6 +263,46 @@ If the background subagent fails, the skill classifies the error and offers appr
 
 > **Note:** Examples in this README use `main` branch paths (`.omc/reflections/`). On the `standalone` branch, all data is stored under `.reflect/` instead (e.g., `.reflect/reflections/`, `.reflect/notifications.md`, `.reflect/project-memory.json`).
 
+## Known Issues
+
+These issues were identified during real-world testing and are candidates for future improvement.
+
+1. **Multi-step process lacks atomicity**
+
+   When `/reflect` is first invoked, the preparation phase (UUID generation, mkdir, prompt writing, subagent launch) involves multiple sequential steps. If the user interjects with a new request mid-flight, the process can be silently abandoned without the subagent ever launching.
+
+   *Fix direction:* Merge the preparation into a single atomic operation, or add a guard that prevents yielding to the user until all steps complete.
+
+2. **Subagent model configuration missing**
+
+   The `claude -p` command that launches the subagent does not specify a model parameter. This may cause the subagent to use a default model instead of the main session's current model.
+
+   *Fix direction:* SKILL.md should guide extracting the current model ID from the main session and passing it via `--model` to the subagent.
+
+3. **Session ID collision on retry**
+
+   After a failed subagent launch, a retry may reuse the already-registered session UUID, causing `claude --resume` behavior to be unpredictable.
+
+   *Fix direction:* Every retry (including `--deep` re-analysis) must generate a new UUID and update `state.json`.
+
+4. **Read tool rendering vs. actual file content**
+
+   When verifying files containing markdown syntax (especially backtick code blocks), the Read tool may render content incorrectly due to nested markdown parsing. The actual file on disk is correct — this is a display issue, not data corruption.
+
+   *Fix direction:* SKILL.md should remind the subagent to use `Bash cat` instead of the Read tool when verifying files with markdown syntax.
+
+5. **Insufficient error recovery options**
+
+   When the subagent launch fails, the current options are "retry / inline fallback / discard". This doesn't cover intermediate states where partial files exist (e.g., `report.md` written but `state.json` not updated).
+
+   *Fix direction:* Add a "check partial results" option that detects and reuses existing partial files to continue the operation.
+
+6. **Cross-compaction notification reliability**
+
+   The standalone branch uses file-based notifications (`.reflect/notifications.md`) instead of the OMC MCP tool. File-based notifications cannot be automatically injected into context after a compaction event.
+
+   *Fix direction:* Consider adding a post-compaction check mechanism in SKILL.md (e.g., reading `state.json` to scan for `pending_review` status).
+
 ## Iterative Development
 
 This skill is designed to be iteratively improved through usage. The recommended workflow:
@@ -297,9 +337,6 @@ If you improve the correction detection or RCA quality, consider opening a PR. T
 - New correction signal patterns (especially non-English)
 - Adjusted root cause taxonomy with real-world examples
 - Subagent prompt improvements that produce better RCA
-- Subagent session retry with UUID collision handling
-- Multi-step atomicity for subagent launch (ensure all steps complete before yielding to user)
-- Write tool fallback for feedback memory file writing ( Bash heredoc works workaround)
 
 ## Development
 
