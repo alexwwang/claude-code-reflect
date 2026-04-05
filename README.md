@@ -218,13 +218,33 @@ The skill uses a three-phase permission design:
 
 **Scope judgment:** During analysis, the model determines whether each artifact is **user-level** (general knowledge, applies across projects) or **project-level** (codebase-specific context). You see the scope reasoning at review time and can override before any write occurs.
 
+### Subagent Launch & Retry Mechanism
+
+The background subagent is launched via `claude -p` from within the main Claude Code session. This nested invocation may encounter `ECONNRESET` errors due to API-side concurrent connection limits — the same API endpoint serves both the main session and the subagent, and transient spikes in concurrent requests can cause the subagent's connection to be reset.
+
+To handle this, the subagent launch is wrapped in a retry subshell:
+
+- **3 retry attempts** with **10-second delay** between each
+- Retry attempts are logged to `stderr.log` with timestamps for debugging
+- The retry subshell `( ... ) &` runs in the background, keeping the parent non-blocking
+
+The subagent model is configurable via the `REFLECT_SUBAGENT_MODEL` environment variable (defaults to `sonnet`). Set it in `~/.claude/settings.json` under `env` to persist:
+
+```json
+{
+  "env": {
+    "REFLECT_SUBAGENT_MODEL": "sonnet"
+  }
+}
+```
+
 ### Error Handling
 
 If the background subagent fails, the skill classifies the error and offers appropriate recovery options:
 
 | Error Type | Detection Pattern | Recovery |
 |------------|-------------------|----------|
-| API connectivity | `ECONNRESET`, `timeout` | Retry with new session |
+| API connectivity | `ECONNRESET`, `timeout` | Auto-retry (3x, 10s delay), then manual retry |
 | Rate limit | `rate limit`, `429` | Wait and retry |
 | Platform issue | Any other failure | Inline fallback or discard |
 
@@ -246,57 +266,17 @@ If the background subagent fails, the skill classifies the error and offers appr
 
 These issues were identified during real-world testing and are candidates for future improvement.
 
-1. **Subagent model configuration missing**
+1. **Preparation phase causes user confusion (v0.2)**
 
-   The `claude -p` command that launches the subagent does not specify a model parameter. This may cause the subagent to use a default model instead of the main session's current model.
+   The preparation phase (state.json, prompt.txt creation) and the `claude -p` launch are executed as separate Bash calls. This creates a window where the main conversation yields to the user, who may think they need to respond. The experience feels like a "freeze" or "stuck" state.
 
-   *Fix direction:* SKILL.md should guide extracting the current model ID from the main session and passing it via `--model` to the subagent.
+   *Fix direction:* Ensure SKILL.md Step 3.1 is executed as a single atomic Bash call — file preparation AND subagent launch in one command, with no user-facing yield between them.
 
-2. **Session ID collision on retry**
+2. **No auto-notification when subagent completes (v0.2)**
 
-   After a failed subagent launch, a retry may reuse the already-registered session UUID, causing `claude --resume` behavior to be unpredictable.
+   The `claude -p` subagent runs as an orphaned background process inside `( ... ) &`. When it completes, there is no mechanism to notify the main conversation. The Bash tool's `<task-notification>` only fires for the parent bash (which exits immediately after `echo`), not for the background subshell. Users must manually check via `/reflect inspect` or poll the output directory.
 
-   *Fix direction:* Every retry (including `--deep` re-analysis) must generate a new UUID and update `state.json`.
-
-3. **Read tool rendering vs. actual file content**
-
-   When verifying files containing markdown syntax (especially backtick code blocks), the Read tool may render content incorrectly due to nested markdown parsing. The actual file on disk is correct — this is a display issue, not data corruption.
-
-   *Fix direction:* SKILL.md should remind the subagent to use `Bash cat` instead of the Read tool when verifying files with markdown syntax.
-
-4. **Insufficient error recovery options**
-
-   When the subagent launch fails, the current options are "retry / inline fallback / discard". This doesn't cover intermediate states where partial files exist (e.g., `report.md` written but `state.json` not updated).
-
-   *Fix direction:* Add a "check partial results" option that detects and reuses existing partial files to continue the operation.
-
-5. **Cross-compaction notification reliability**
-
-   The standalone branch uses file-based notifications (`.reflect/notifications.md`). File-based notifications cannot be automatically injected into context after a compaction event.
-
-   *Fix direction:* Consider adding a post-compaction check mechanism in SKILL.md (e.g., reading `state.json` to scan for `pending_review` status).
-
-### Resolved Issues
-
-- ~~**Background subagent write path bug**~~ — Resolved by write path redesign (v3). Background subagent now writes ONLY to project-local staging directory. All final writes occur in the interactive review session where `~/.claude/` access works normally.
-
-- ~~**Multi-step process lacks atomicity**~~ — Resolved by merging all preparation steps into a single atomic Bash command. No interruption window exists between steps.
-
-## Known Issues
-
-These issues were identified during real-world testing and are candidates for future improvement.
-
-1. **Multi-step process lacks atomicity**
-
-   When `/reflect` is first invoked, the preparation phase (UUID generation, mkdir, prompt writing, subagent launch) involves multiple sequential steps. If the user interjects with a new request mid-flight, the process can be silently abandoned without the subagent ever launching.
-
-   *Fix direction:* Merge the preparation into a single atomic operation, or add a guard that prevents yielding to the user until all steps complete.
-
-2. **Subagent model configuration missing**
-
-   The `claude -p` command that launches the subagent does not specify a model parameter. This may cause the subagent to use a default model instead of the main session's current model.
-
-   *Fix direction:* SKILL.md should guide extracting the current model ID from the main session and passing it via `--model` to the subagent.
+   *Fix direction:* Consider adding a CronCreate-based polling mechanism, a completion marker file, or restructuring the launch to keep the background task alive until `claude -p` finishes.
 
 3. **Session ID collision on retry**
 
@@ -318,9 +298,19 @@ These issues were identified during real-world testing and are candidates for fu
 
 6. **Cross-compaction notification reliability**
 
-   The standalone branch uses file-based notifications (`.reflect/notifications.md`) instead of the OMC MCP tool. File-based notifications cannot be automatically injected into context after a compaction event.
+   The standalone branch uses file-based notifications (`.reflect/notifications.md`). File-based notifications cannot be automatically injected into context after a compaction event.
 
    *Fix direction:* Consider adding a post-compaction check mechanism in SKILL.md (e.g., reading `state.json` to scan for `pending_review` status).
+
+### Resolved Issues
+
+- ~~**Background subagent write path bug**~~ — Resolved by write path redesign (v3). Background subagent now writes ONLY to project-local staging directory. All final writes occur in the interactive review session where `~/.claude/` access works normally.
+
+- ~~**Multi-step process lacks atomicity**~~ — Resolved by merging all preparation steps into a single atomic Bash command. No interruption window exists between steps.
+
+- ~~**ECONNRESET API errors on subagent launch**~~ — Resolved in v0.2. The `claude -p` subagent launch is wrapped in a retry subshell (3 attempts, 10s delay). API-side concurrent connection limits no longer cause permanent subagent failures.
+
+- ~~**Subagent model configuration missing**~~ — Resolved in v0.2. Subagent now uses `--model ${REFLECT_SUBAGENT_MODEL:-sonnet}`, configurable via environment variable.
 
 ## Iterative Development
 
