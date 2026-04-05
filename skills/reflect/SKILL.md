@@ -98,12 +98,12 @@ All setup steps are merged into a **single Bash call** to eliminate the interrup
 ```bash
 SESSION_ID=$(uuidgen) && \
 mkdir -p {project_root}/.reflect/reflections/{reflection_id} && \
-cat > {project_root}/.reflect/reflections/{reflection_id}/state.json << 'EOF'
+cat > {project_root}/.reflect/reflections/{reflection_id}/state.json << EOF
 {
   "id": "{reflection_id}",
   "status": "running",
   "session_id": "$SESSION_ID",
-  "created_at": "{ISO_timestamp}",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "error_claim": "{error_claim_summary}",
   "correction": "{correction_summary}"
 }
@@ -113,6 +113,7 @@ cat > {project_root}/.reflect/reflections/{reflection_id}/prompt.txt << 'PROMPT_
 PROMPT_EOF
 claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
   --session-id $SESSION_ID \
+  --permission-mode bypassPermissions \
   --output-format json \
   2>{project_root}/.reflect/reflections/{reflection_id}/stderr.log &
 echo $SESSION_ID
@@ -123,7 +124,7 @@ Launch via Bash with `run_in_background=true`.
 Key design points:
 - **Single Bash call**: produces at most one permission confirmation in `ask` mode; `bypassPermissions` on this call eliminates even that, ensuring atomic execution
 - **`--session-id`**: Creates a persistent, resumable session
-- **No `--permission-mode` on subagent**: The subagent writes only to project root — no elevated access needed. Avoids the confirmed bug where subagents with `bypassPermissions` are denied access outside project root
+- **`--permission-mode bypassPermissions`**: Required for the subagent to write output files (report.md, state.json, notifications.md) without interactive permission prompts. Safe because the subagent is restricted to project root only. Note: Claude Code has a confirmed bug where `bypassPermissions` on subagents silently denies writes outside the project root — this is acceptable since our subagent only writes within `.reflect/reflections/`
 - **`--output-format json`**: Returns structured result (one-line summary from subagent)
 - **`2>stderr.log`**: Captures errors for debugging
 - **Background (`&`)**: Subagent runs independently; main conversation continues immediately
@@ -172,6 +173,10 @@ You are a reflection agent. Your task is to analyze a model error, perform root 
 IMPORTANT: After saving files, return ONLY a one-line summary in this exact format:
 "Reflection {id} complete. Root cause: {category}. {N} drafts saved."
 Do NOT include the full report content, Do NOT include draft artifact text. Just the one-line summary.
+
+## First Step: Preserve Session State
+
+Before writing anything, READ the existing `{project_root}/.reflect/reflections/{reflection_id}/state.json` file. This file was created by the preparation step and contains the real `session_id` and `created_at`. You MUST preserve these values exactly as-is when you update state.json in Task D. Do NOT use placeholders like "PLACEHOLDER" — use the actual values from the existing file.
 
 ## Path Restrictions (MANDATORY)
 
@@ -422,7 +427,7 @@ If a Claude Code feedback memory was written, also update `MEMORY.md` index in t
 # Step 3.1: Atomic preparation + launch (single Bash call)
 SESSION_ID=$(uuidgen) && \
 mkdir -p {project_root}/.reflect/reflections/{reflection_id} && \
-cat > {project_root}/.reflect/reflections/{reflection_id}/state.json << 'EOF'
+cat > {project_root}/.reflect/reflections/{reflection_id}/state.json << EOF
 {state_json_content}
 EOF
 cat > {project_root}/.reflect/reflections/{reflection_id}/prompt.txt << 'PROMPT_EOF'
@@ -430,6 +435,7 @@ cat > {project_root}/.reflect/reflections/{reflection_id}/prompt.txt << 'PROMPT_
 PROMPT_EOF
 claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
   --session-id $SESSION_ID \
+  --permission-mode bypassPermissions \
   --output-format json \
   2>{project_root}/.reflect/reflections/{reflection_id}/stderr.log &
 echo $SESSION_ID
@@ -566,7 +572,7 @@ Why bad: User and main agent are blind to subagent state. Cannot distinguish "st
 - [ ] Correction signal detected from conversation (or user provided explicit context)
 - [ ] Preparation completed atomically (single Bash call with bypassPermissions for atomicity)
 - [ ] Session UUID generated and saved to state.json
-- [ ] Background Claude session launched with --session-id (no --permission-mode flag on subagent)
+- [ ] Background Claude session launched with --session-id and --permission-mode bypassPermissions
 - [ ] Reflection report saved to `.reflect/reflections/{id}/report.md` with scope judgments per artifact
 - [ ] State file updated to `pending_review` with artifacts array (scope/scope_reasoning per artifact)
 - [ ] Notification file written to `.reflect/notifications.md` with review instructions
