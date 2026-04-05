@@ -279,6 +279,46 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 
 - ~~**多步流程缺乏原子性保护**~~ — 通过将所有准备步骤合并为单次原子 Bash 命令已解决。步骤之间不再存在中断窗口。
 
+## 待改善项
+
+以下问题在实际测试中发现，待后续改进。
+
+1. **多步流程缺乏原子性保护**
+
+   首次调用 `/reflect` 时，准备阶段（UUID 生成、mkdir、prompt 写入、subagent 启动）涉及多个顺序步骤。如果用户在流程中途插入新请求，整个过程可能被静默放弃，subagent 始终未启动。
+
+   *改进方向：* 将准备阶段合并为单次原子操作，或设置不可中断保护，确保所有步骤完成后才能响应用户。
+
+2. **Subagent 模型配置缺失**
+
+   启动 subagent 的 `claude -p` 命令未指定模型参数，可能使用默认模型而非主 session 的当前模型。
+
+   *改进方向：* SKILL.md 中应指导从主 session 获取当前模型 ID，通过 `--model` 参数传递给 subagent。
+
+3. **重试时 Session ID 冲突**
+
+   subagent 启动失败后重试时，可能复用已注册的 session UUID，导致 `claude --resume` 行为不确定。
+
+   *改进方向：* 每次重试（包括 `--deep` 重分析）必须生成新的 UUID，并在 `state.json` 中更新。
+
+4. **Read 工具渲染与实际文件内容不一致**
+
+   验证含 markdown 语法的文件（尤其是反引号代码块）时，Read 工具可能因嵌套 markdown 解析而渲染异常。磁盘上的实际文件内容是正确的——这是显示问题，不是数据损坏。
+
+   *改进方向：* SKILL.md 中应提醒 subagent，验证含 markdown 语法的文件时使用 `Bash cat` 而非 Read 工具。
+
+5. **错误恢复选项不充分**
+
+   subagent 启动失败后，当前选项为"重试/内联回退/放弃"，未覆盖部分文件已写入的中间状态（如 `report.md` 已存在但 `state.json` 未更新）。
+
+   *改进方向：* 增加"检查部分结果"选项，检测并利用已存在的部分文件继续完成操作。
+
+6. **跨 Compaction 通知可靠性**
+
+   standalone 分支使用文件写入（`.reflect/notifications.md`）替代 OMC MCP 工具。文件通知无法在 context compaction 后自动注入上下文。
+
+   *改进方向：* 考虑在 SKILL.md 中增加 post-compaction 检查机制（如读取 `state.json` 扫描 `pending_review` 状态）。
+
 ## 迭代改进
 
 本技能设计为通过实际使用不断迭代改进。推荐的工作流：

@@ -604,7 +604,8 @@ When a background subagent fails or appears stuck:
 3. **Check stderr**: `cat {project_root}/.reflect/reflections/{id}/stderr.log` — API errors, permission issues
 4. **Check partial output**: Does `report.md` exist? Is it complete or truncated?
 5. **Check task output**: Read the Bash task output file for the subagent's return value
-6. **Fallback**: If subagent keeps failing, offer inline execution as fallback
+6. **Classifier unavailability**: If errors mention "temporarily unavailable", the internal safety classifier was down. This should be resolved by `bypassPermissions` mode — verify the launch command uses it.
+7. **Fallback**: If subagent keeps failing, offer inline execution as fallback
 
 ## Future Enhancements
 
