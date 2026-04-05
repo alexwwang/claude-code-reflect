@@ -23,27 +23,35 @@ This plugin has two branches with different dependency requirements:
 
 | Branch | OMC Required | Install Command |
 |--------|-------------|-----------------|
-| `main` | Yes | `claude plugin add github:alexwwang/claude-code-reflect` |
-| `standalone` | No | `claude plugin add github:alexwwang/claude-code-reflect --branch standalone` |
+| `main` | Yes | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect` |
+| `standalone` | No | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect` (then switch branch) |
 
 ### Option A: With oh-my-claudecode (`main` branch, recommended)
 
 Uses OMC's MCP tools (`notepad_write_priority`, `project_memory_add_note`) for cross-compaction notifications and project memory integration.
 
-```bash
+```
 # 1. Install oh-my-claudecode first
-claude plugin add github:Yeachan-Heo/oh-my-claudecode
+/plugin marketplace add https://github.com/Yeachan-Heo/oh-my-claudecode
+/plugin install oh-my-claudecode
 
 # 2. Install reflect (main branch, default)
-claude plugin add github:alexwwang/claude-code-reflect
+/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
+/plugin install claude-code-reflect
+
+# 3. Restart Claude Code completely (not just /reload-plugins)
 ```
 
 ### Option B: Standalone (`standalone` branch)
 
 Replaces all OMC dependencies with direct file operations. No OMC needed, but loses cross-compaction notification reliability and cross-skill delegation.
 
-```bash
-claude plugin add github:alexwwang/claude-code-reflect --branch standalone
+```
+/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
+/plugin install claude-code-reflect
+# Then manually switch to the standalone branch:
+cd ~/.claude/plugins/cache/claude-code-reflect/claude-code-reflect/0.1.0/claude-code-reflect && git checkout standalone
+# Restart Claude Code completely (not just /reload-plugins)
 ```
 
 See [Branch Comparison](#branch-comparison) for detailed differences.
@@ -55,7 +63,7 @@ See [Branch Comparison](#branch-comparison) for detailed differences.
 When you correct Claude, invoke the skill:
 
 ```
-/oh-my-claudecode:reflect
+/claude-code-reflect:reflect
 ```
 
 Or just say something corrective and then invoke it. The skill scans recent turns for correction signals.
@@ -65,7 +73,7 @@ Or just say something corrective and then invoke it. The skill scans recent turn
 When the background analysis completes, review the drafts:
 
 ```
-/oh-my-claudecode:reflect review ref-20260404a
+/claude-code-reflect:reflect review ref-20260404a
 ```
 
 You can approve all, approve with modifications, re-analyze with more context, or discard.
@@ -75,7 +83,7 @@ You can approve all, approve with modifications, re-analyze with more context, o
 Check on a running background analysis:
 
 ```
-/oh-my-claudecode:reflect inspect ref-20260404a
+/claude-code-reflect:reflect inspect ref-20260404a
 ```
 
 This shows session status, logs, and how to resume the subagent session directly.
@@ -87,7 +95,7 @@ After installing and restarting Claude Code, run this smoke test to confirm ever
 **Test 1: Skill is discovered**
 ```
 # In Claude Code, type:
-/oh-my-claudecode:reflect
+/claude-code-reflect:reflect
 
 # Expected: Claude asks what you want to reflect on (AskUserQuestion appears)
 # If you see "skill not found", restart Claude Code completely (not just /reload-plugins)
@@ -100,14 +108,14 @@ After installing and restarting Claude Code, run this smoke test to confirm ever
 You: Tell me about Go's append() function.
 Claude: [gives some explanation, e.g. "append() always creates a new slice"]
 You: That's wrong. append() reuses the underlying array when capacity is sufficient.
-You: /oh-my-claudecode:reflect
+You: /claude-code-reflect:reflect
 
 # Expected flow:
 # 1. Claude detects "That's wrong" as a direct negation signal
 # 2. Claude launches a background session and gives you the session UUID
 # 3. Main conversation continues normally
 # 4. When background completes, you get a notification
-# 5. Run: /oh-my-claudecode:reflect review ref-xxxxxxxx
+# 5. Run: /claude-code-reflect:reflect review ref-xxxxxxxx
 # 6. You see the RCA report with drafted memory artifacts
 ```
 
@@ -116,7 +124,7 @@ You: /oh-my-claudecode:reflect
 You: What does Python's sorted() return?
 Claude: [says something wrong, e.g. "sorted() sorts the list in place"]
 You: Incorrect, sorted() returns a new list, it doesn't modify the original.
-You: /oh-my-claudecode:reflect
+You: /claude-code-reflect:reflect
 
 # Expected: same flow as Test 2
 ```
@@ -124,7 +132,7 @@ You: /oh-my-claudecode:reflect
 **Test 4: Review flow**
 ```
 # After the background task completes:
-/oh-my-claudecode:reflect review ref-xxxxxxxx
+/claude-code-reflect:reflect review ref-xxxxxxxx
 
 # Expected: Claude displays:
 #   - Root Cause Analysis (category, reasoning chain)

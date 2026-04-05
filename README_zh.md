@@ -23,27 +23,35 @@
 
 | 分支 | 需要 OMC | 安装命令 |
 |------|---------|---------|
-| main | 是 | claude plugin add github:alexwwang/claude-code-reflect |
-| standalone | 否 | claude plugin add github:alexwwang/claude-code-reflect --branch standalone |
+| main | 是 | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect` |
+| standalone | 否 | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect`（然后切换分支） |
 
 ### 方式 A：配合 oh-my-claudecode（main 分支，推荐）
 
 使用 OMC 的 MCP 工具实现跨 compaction 通知和项目记忆集成。
 
-```bash
+```
 # 1. 先安装 oh-my-claudecode
-claude plugin add github:Yeachan-Heo/oh-my-claudecode
+/plugin marketplace add https://github.com/Yeachan-Heo/oh-my-claudecode
+/plugin install oh-my-claudecode
 
 # 2. 安装 reflect（main 分支，默认）
-claude plugin add github:alexwwang/claude-code-reflect
+/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
+/plugin install claude-code-reflect
+
+# 3. 完全重启 Claude Code（不是 /reload-plugins）
 ```
 
 ### 方式 B：独立安装（standalone 分支）
 
 将所有 OMC 依赖替换为直接文件操作，不需要安装 OMC，但会失去跨 compaction 通知可靠性和跨技能委托能力。
 
-```bash
-claude plugin add github:alexwwang/claude-code-reflect --branch standalone
+```
+/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
+/plugin install claude-code-reflect
+# 然后手动切换到 standalone 分支：
+cd ~/.claude/plugins/cache/claude-code-reflect/claude-code-reflect/0.1.0/claude-code-reflect && git checkout standalone
+# 完全重启 Claude Code（不是 /reload-plugins）
 ```
 
 详见下方[分支对比](#分支对比)。
@@ -55,7 +63,7 @@ claude plugin add github:alexwwang/claude-code-reflect --branch standalone
 当你纠正 Claude 后，调用技能：
 
 ```
-/oh-my-claudecode:reflect
+/claude-code-reflect:reflect
 ```
 
 也可以直接说出纠正内容然后调用。技能会扫描最近的对话轮次寻找纠正信号。
@@ -65,7 +73,7 @@ claude plugin add github:alexwwang/claude-code-reflect --branch standalone
 后台分析完成后，审查草拟文档：
 
 ```
-/oh-my-claudecode:reflect review ref-20260404a
+/claude-code-reflect:reflect review ref-20260404a
 ```
 
 你可以全部批准、修改后批准、提供更多上下文重新分析、或放弃。
@@ -75,7 +83,7 @@ claude plugin add github:alexwwang/claude-code-reflect --branch standalone
 查看正在运行的后台分析状态：
 
 ```
-/oh-my-claudecode:reflect inspect ref-20260404a
+/claude-code-reflect:reflect inspect ref-20260404a
 ```
 
 显示会话状态、日志，以及如何直接恢复 subagent 会话。
@@ -87,7 +95,7 @@ claude plugin add github:alexwwang/claude-code-reflect --branch standalone
 **测试 1：技能发现**
 ```
 # 在 Claude Code 中输入：
-/oh-my-claudecode:reflect
+/claude-code-reflect:reflect
 
 # 预期：Claude 会用 AskUserQuestion 询问你要反思什么
 # 如果看到 "skill not found"，需要完全重启 Claude Code（不是 /reload-plugins）
@@ -100,14 +108,14 @@ claude plugin add github:alexwwang/claude-code-reflect --branch standalone
 You: 介绍一下 Go 的 append() 函数。
 Claude: [给出一些解释，例如 "append() 总是创建新的 slice"]
 You: 不对，append() 在容量足够时会复用底层数组。
-You: /oh-my-claudecode:reflect
+You: /claude-code-reflect:reflect
 
 # 预期流程：
 # 1. Claude 检测到 "不对" 作为直接否定信号
 # 2. Claude 启动后台会话，告诉你 session UUID
 # 3. 主对话正常继续
 # 4. 后台完成后你收到通知
-# 5. 运行：/oh-my-claudecode:reflect review ref-xxxxxxxx
+# 5. 运行：/claude-code-reflect:reflect review ref-xxxxxxxx
 # 6. 你看到 RCA 报告和草拟的记忆文档
 ```
 
@@ -116,7 +124,7 @@ You: /oh-my-claudecode:reflect
 You: What does Python's sorted() return?
 Claude: [说错了，例如 "sorted() sorts the list in place"]
 You: Incorrect, sorted() returns a new list, it doesn't modify the original.
-You: /oh-my-claudecode:reflect
+You: /claude-code-reflect:reflect
 
 # 预期：同测试 2 的流程
 ```
@@ -124,7 +132,7 @@ You: /oh-my-claudecode:reflect
 **测试 4：审查流程**
 ```
 # 后台任务完成后：
-/oh-my-claudecode:reflect review ref-xxxxxxxx
+/claude-code-reflect:reflect review ref-xxxxxxxx
 
 # 预期：Claude 展示：
 #   - 根因分析（类别、推理链）

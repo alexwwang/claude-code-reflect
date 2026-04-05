@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: "Detect model corrections, delegate RCA to background subagent, async review with user approval"
+description: Detect model corrections, delegate RCA to background subagent, async review with user approval
 argument-hint: "[review <id>] [inspect <id>] [--deep] [correction context]"
 level: 3
 ---
@@ -12,10 +12,10 @@ Reflect fills the gap between `learner` (extracts reusable skills) and `remember
 </Purpose>
 
 <Use_When>
-- User manually invokes `/oh-my-claudecode:reflect`
+- User manually invokes `/claude-code-reflect:reflect`
 - User wants to reflect on a correction that just happened
-- User invokes `/oh-my-claudecode:reflect review <id>` to review a completed reflection
-- User invokes `/oh-my-claudecode:reflect inspect <id>` to check background subagent progress
+- User invokes `/claude-code-reflect:reflect review <id>` to review a completed reflection
+- User invokes `/claude-code-reflect:reflect inspect <id>` to check background subagent progress
 </Use_When>
 
 <Do_Not_Use_When>
@@ -322,7 +322,7 @@ type: feedback
 
 2. Use the `notepad_write_priority` MCP tool to inject a persistent notification:
 ```
-[Reflection complete ID:{reflection_id}] Root cause: {category} | Severity: {severity} | Enter /oh-my-claudecode:reflect review {reflection_id} to review drafts and approve memory artifacts
+[Reflection complete ID:{reflection_id}] Root cause: {category} | Severity: {severity} | Enter /claude-code-reflect:reflect review {reflection_id} to review drafts and approve memory artifacts
 ```
 
 3. Create the reflections directory if it does not exist.
@@ -335,7 +335,7 @@ After launching the subagent, respond to the user normally in the main conversat
 
 ## Step 4: Review Mode (User-Initiated)
 
-When the user invokes `/oh-my-claudecode:reflect review <id>` or mentions reviewing a reflection ID:
+When the user invokes `/claude-code-reflect:reflect review <id>` or mentions reviewing a reflection ID:
 
 ### 4.1 Load Reflection
 
@@ -438,7 +438,7 @@ $ claude --resume {uuid}
 
 [Background completes] Notepad notification: "[Reflection complete ID:ref-20260404a]..."
 
-[Turn 3] User: /oh-my-claudecode:reflect review ref-20260404a
+[Turn 3] User: /claude-code-reflect:reflect review ref-20260404a
 [Turn 3] Claude: [reads report, displays RCA + drafted artifacts]
 [Turn 3] User: 确认，全部写入
 [Turn 3] Claude: [writes all artifacts to final locations]
@@ -448,7 +448,7 @@ $ claude --resume {uuid}
 <Good>
 User inspects stuck subagent:
 ```
-[Turn 2] User: /oh-my-claudecode:reflect inspect ref-20260404a
+[Turn 2] User: /claude-code-reflect:reflect inspect ref-20260404a
 [Turn 2] Claude: [reads state.json]
   Status: running
   Session UUID: {uuid}
@@ -462,7 +462,7 @@ User inspects stuck subagent:
 <Good>
 User modifies before approving:
 ```
-[Turn 5] User: /oh-my-claudecode:reflect review ref-20260404a
+[Turn 5] User: /claude-code-reflect:reflect review ref-20260404a
 [Turn 5] Claude: [displays results]
 [Turn 5] User: 根因分析没问题，但记忆文档要加一条：这个项目用的是 v2.x 不是 v3.x
 [Turn 5] Claude: [modifies drafts based on feedback → writes modified versions to final locations]
