@@ -215,13 +215,33 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 
 **范围判断：** 分析阶段，模型会判断每个 artifact 是**用户级**（通用知识错误，跨项目适用）还是**项目级**（代码库特定上下文）。你在审查时会看到判断理由，可以在写入前覆盖。
 
+### Subagent 启动与重试机制
+
+后台 subagent 通过 `claude -p` 从主 Claude Code 会话中启动。这种嵌套调用可能因 API 侧并发连接限制而遇到 `ECONNRESET` 错误——同一 API 端点同时服务主会话和 subagent，瞬时并发请求高峰可能导致 subagent 的连接被重置。
+
+为此，subagent 启动被包装在重试子 shell 中：
+
+- **3 次重试**，每次间隔 **10 秒**
+- 重试尝试会带时间戳记录到 `stderr.log`，便于调试
+- 重试子 shell `( ... ) &` 在后台运行，不阻塞父进程
+
+Subagent 模型可通过 `REFLECT_SUBAGENT_MODEL` 环境变量配置（默认为 `sonnet`）。在 `~/.claude/settings.json` 的 `env` 中设置以持久化：
+
+```json
+{
+  "env": {
+    "REFLECT_SUBAGENT_MODEL": "sonnet"
+  }
+}
+```
+
 ### 错误处理
 
 如果后台 subagent 失败，技能会分类错误并提供相应的恢复选项：
 
 | 错误类型 | 检测模式 | 恢复方式 |
 |---------|---------|---------|
-| API 连接问题 | `ECONNRESET`、`timeout` | 使用新会话重试 |
+| API 连接问题 | `ECONNRESET`、`timeout` | 自动重试（3 次，10 秒间隔），然后手动重试 |
 | 速率限制 | `rate limit`、`429` | 等待后重试 |
 | 平台问题 | 其他失败 | 内联执行回退或放弃 |
 
@@ -243,57 +263,17 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 
 以下问题在实际测试中发现，待后续改进。
 
-1. **Subagent 模型配置缺失**
+1. **准备阶段造成用户困惑（v0.2）**
 
-   启动 subagent 的 `claude -p` 命令未指定模型参数，可能使用默认模型而非主 session 的当前模型。
+   准备阶段（state.json、prompt.txt 创建）和 `claude -p` 启动作为独立的 Bash 调用执行。这会创造一个主对话让出控制权的窗口，用户可能认为需要回复。体验上感觉像是"假死"或"卡住"状态。
 
-   *改进方向：* SKILL.md 中应指导从主 session 获取当前模型 ID，通过 `--model` 参数传递给 subagent。
+   *改进方向：* 确保 SKILL.md Step 3.1 作为单次原子 Bash 调用执行——文件准备和 subagent 启动在同一条命令中完成，中间不向用户让出控制权。
 
-2. **重试时 Session ID 冲突**
+2. **Subagent 完成后无自动通知（v0.2）**
 
-   subagent 启动失败后重试时，可能复用已注册的 session UUID，导致 `claude --resume` 行为不确定。
+   `claude -p` subagent 作为 `( ... ) &` 内的孤儿后台进程运行。完成时没有机制通知主对话。Bash 工具的 `<task-notification>` 仅对父 bash（在 `echo` 后立即退出）生效，不对后台子 shell 生效。用户必须通过 `/reflect inspect` 手动检查或轮询输出目录。
 
-   *改进方向：* 每次重试（包括 `--deep` 重分析）必须生成新的 UUID，并在 `state.json` 中更新。
-
-3. **Read 工具渲染与实际文件内容不一致**
-
-   验证含 markdown 语法的文件（尤其是反引号代码块）时，Read 工具可能因嵌套 markdown 解析而渲染异常。磁盘上的实际文件内容是正确的——这是显示问题，不是数据损坏。
-
-   *改进方向：* SKILL.md 中应提醒 subagent，验证含 markdown 语法的文件时使用 `Bash cat` 而非 Read 工具。
-
-4. **错误恢复选项不充分**
-
-   subagent 启动失败后，当前选项为"重试/内联回退/放弃"，未覆盖部分文件已写入的中间状态（如 `report.md` 已存在但 `state.json` 未更新）。
-
-   *改进方向：* 增加"检查部分结果"选项，检测并利用已存在的部分文件继续完成操作。
-
-5. **跨 Compaction 通知可靠性**
-
-   standalone 分支使用文件写入（`.reflect/notifications.md`）。文件通知无法在 context compaction 后自动注入上下文。
-
-   *改进方向：* 考虑在 SKILL.md 中增加 post-compaction 检查机制（如读取 `state.json` 扫描 `pending_review` 状态）。
-
-### 已解决的问题
-
-- ~~**后台 subagent 写入路径 bug**~~ — 通过写入路径重设计（v3）已解决。后台 subagent 现在仅写入项目内暂存目录。所有最终写入在交互式审查会话中执行，`~/.claude/` 访问正常。
-
-- ~~**多步流程缺乏原子性保护**~~ — 通过将所有准备步骤合并为单次原子 Bash 命令已解决。步骤之间不再存在中断窗口。
-
-## 待改善项
-
-以下问题在实际测试中发现，待后续改进。
-
-1. **多步流程缺乏原子性保护**
-
-   首次调用 `/reflect` 时，准备阶段（UUID 生成、mkdir、prompt 写入、subagent 启动）涉及多个顺序步骤。如果用户在流程中途插入新请求，整个过程可能被静默放弃，subagent 始终未启动。
-
-   *改进方向：* 将准备阶段合并为单次原子操作，或设置不可中断保护，确保所有步骤完成后才能响应用户。
-
-2. **Subagent 模型配置缺失**
-
-   启动 subagent 的 `claude -p` 命令未指定模型参数，可能使用默认模型而非主 session 的当前模型。
-
-   *改进方向：* SKILL.md 中应指导从主 session 获取当前模型 ID，通过 `--model` 参数传递给 subagent。
+   *改进方向：* 考虑添加基于 CronCreate 的轮询机制、完成标记文件，或重构启动方式使后台任务在 `claude -p` 完成前保持存活。
 
 3. **重试时 Session ID 冲突**
 
@@ -315,9 +295,19 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 
 6. **跨 Compaction 通知可靠性**
 
-   standalone 分支使用文件写入（`.reflect/notifications.md`）替代 OMC MCP 工具。文件通知无法在 context compaction 后自动注入上下文。
+   standalone 分支使用文件写入（`.reflect/notifications.md`）。文件通知无法在 context compaction 后自动注入上下文。
 
    *改进方向：* 考虑在 SKILL.md 中增加 post-compaction 检查机制（如读取 `state.json` 扫描 `pending_review` 状态）。
+
+### 已解决的问题
+
+- ~~**后台 subagent 写入路径 bug**~~ — 通过写入路径重设计（v3）已解决。后台 subagent 现在仅写入项目内暂存目录。所有最终写入在交互式审查会话中执行，`~/.claude/` 访问正常。
+
+- ~~**多步流程缺乏原子性保护**~~ — 通过将所有准备步骤合并为单次原子 Bash 命令已解决。步骤之间不再存在中断窗口。
+
+- ~~**Subagent 启动 ECONNRESET API 错误**~~ — v0.2 已解决。`claude -p` subagent 启动被包装在重试子 shell 中（3 次重试，10 秒间隔）。API 侧并发连接限制不再导致 subagent 永久失败。
+
+- ~~**Subagent 模型配置缺失**~~ — v0.2 已解决。Subagent 现在使用 `--model ${REFLECT_SUBAGENT_MODEL:-sonnet}`，可通过环境变量配置。
 
 ## 迭代改进
 
