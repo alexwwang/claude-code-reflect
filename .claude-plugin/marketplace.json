@@ -1,0 +1,24 @@
+{
+  "name": "claude-code-reflect",
+  "owner": {
+    "name": "alexwwang"
+  },
+  "plugins": [
+    {
+      "name": "claude-code-reflect",
+      "source": "./",
+      "description": "Detects model corrections, performs background RCA, and drafts memory artifacts for review",
+      "version": "0.1.0",
+      "author": {
+        "name": "alexwwang"
+      },
+      "homepage": "https://github.com/alexwwang/claude-code-reflect",
+      "tags": [
+        "reflection",
+        "rca",
+        "memory",
+        "root-cause-analysis"
+      ]
+    }
+  ]
+}
