@@ -19,10 +19,14 @@
 
 ## 安装
 
-```
-/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
-/plugin install claude-code-reflect
-# 完全重启 Claude Code（不是 /reload-plugins）
+```bash
+# 步骤1：注册 marketplace
+/plugin marketplace add alexwwang/claude-code-reflect
+
+# 步骤2：安装插件
+/plugin install claude-code-reflect@alexwwang/claude-code-reflect
+
+# 步骤3：完全重启 Claude Code（不是 /reload-plugins）
 ```
 
 > **注意：** 仅维护 `standalone` 分支。`main`（依赖 OMC）分支已废弃。
@@ -202,12 +206,12 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 | 阶段 | 会话类型 | `bypassPermissions` | 写入位置 |
 |------|---------|---------------------|---------|
 | 准备 | 主会话（单次原子 Bash） | 是 — 保证原子性 | 仅 `.reflect/reflections/` |
-| 后台分析 | 后台 subagent | 否 | 仅 `.reflect/reflections/{id}/` |
+| 后台分析 | 后台 subagent | 是 — 非交互模式写入必需 | 仅 `.reflect/reflections/{id}/` |
 | 审查 + 写入 | 交互式（恢复的）会话 | 否 | `.reflect/` + `~/.claude/` |
 
 **准备阶段为何使用 `bypassPermissions`：** 准备阶段（uuidgen、mkdir、写 state.json、写 prompt、启动 subagent）合并为单次 Bash 调用。不使用 `bypassPermissions` 时，此调用在 `ask` 模式下会产生确认提示，制造中断窗口——用户的新消息可能穿插进来，导致 subagent 永远不会启动。由于所有操作都在项目根目录内（mkdir、文件写入），没有实质性的安全风险。
 
-**subagent 为何不使用 `bypassPermissions`：** subagent 仅写入项目根目录——不需要提升权限。这避免了一个已确认的 Claude Code bug：使用 `bypassPermissions` 的后台 subagent 会被静默拒绝访问项目根目录之外的路径。
+**subagent 为何使用 `bypassPermissions`：** subagent 通过 `claude -p` 以非交互模式运行——没有 `bypassPermissions`，所有工具调用（包括 Write）都会被拒绝，因为无法交互式审批权限。这是安全的，因为 subagent prompt 限制仅写入项目根内的 `.reflect/reflections/{id}/`。注意：Claude Code 有一个已确认的 bug，`bypassPermissions` 会静默拒绝项目根以外的写入——由于我们的 subagent 仅在项目内写入，这可以接受。
 
 **范围判断：** 分析阶段，模型会判断每个 artifact 是**用户级**（通用知识错误，跨项目适用）还是**项目级**（代码库特定上下文）。你在审查时会看到判断理由，可以在写入前覆盖。
 

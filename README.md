@@ -19,10 +19,14 @@ The analysis uses a structured root cause taxonomy: Assumption Error, Context Ga
 
 ## Installation
 
-```
-/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
-/plugin install claude-code-reflect
-# Restart Claude Code completely (not just /reload-plugins)
+```bash
+# Step 1: Register marketplace
+/plugin marketplace add alexwwang/claude-code-reflect
+
+# Step 2: Install plugin
+/plugin install claude-code-reflect@alexwwang/claude-code-reflect
+
+# Step 3: Restart Claude Code completely (not just /reload-plugins)
 ```
 
 > **Note:** Only the `standalone` branch is actively maintained. The `main` (OMC-dependent) branch is deprecated.
@@ -205,12 +209,12 @@ The skill uses a three-phase permission design:
 | Phase | Session type | `bypassPermissions` | Writes to |
 |-------|-------------|---------------------|-----------|
 | Preparation | main session (1 atomic Bash call) | Yes — atomicity | `.reflect/reflections/` only |
-| Background analysis | background subagent | No | `.reflect/reflections/{id}/` only |
+| Background analysis | background subagent | Yes — required for file writes in non-interactive mode | `.reflect/reflections/{id}/` only |
 | Review + write | interactive (resumed) session | No | `.reflect/` + `~/.claude/` |
 
 **Why `bypassPermissions` in preparation:** The preparation phase (uuidgen, mkdir, write state.json, write prompt, launch subagent) is merged into a single Bash call. Without `bypassPermissions`, this call produces a confirmation prompt in `ask` mode, creating an interruption window where the user's next message could interleave with the preparation flow, causing the subagent to never launch. Since all operations are within the project root (mkdir, file write) and `/tmp`-equivalent, there is no meaningful security risk.
 
-**Why NO `bypassPermissions` on the subagent:** The subagent writes only to the project root — no elevated access needed. This avoids a confirmed Claude Code bug where background subagents with `bypassPermissions` are silently denied access to paths outside the project root.
+**Why `bypassPermissions` on the subagent:** The subagent runs via `claude -p` in non-interactive mode — without `bypassPermissions`, all tool calls (including Write) are denied because there's no way to interactively approve permissions. This is safe because the subagent prompt restricts writes to `.reflect/reflections/{id}/` within the project root. Note: Claude Code has a confirmed bug where `bypassPermissions` silently denies writes *outside* the project root — this is acceptable since our subagent only writes within the project.
 
 **Scope judgment:** During analysis, the model determines whether each artifact is **user-level** (general knowledge, applies across projects) or **project-level** (codebase-specific context). You see the scope reasoning at review time and can override before any write occurs.
 
