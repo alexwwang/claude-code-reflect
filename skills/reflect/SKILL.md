@@ -50,7 +50,7 @@ The existing `learner` skill detects problem-solution patterns but does not spec
 Check the invocation arguments:
 
 - If arguments contain `review` followed by a reflection ID: skip to **Step 4** (Review Mode)
-- If arguments contain `inspect` followed by a reflection ID: skip to **Step 3.5** (Inspect Mode)
+- If arguments contain `inspect` followed by a reflection ID: skip to **Step 3.3** (Inspect Mode)
 - If arguments contain `--deep`: set deep analysis flag
 - Otherwise: proceed to **Step 2** (Detection + Reflection Mode)
 
@@ -91,67 +91,54 @@ Proceed to **Step 3** — fire the subagent immediately, do not wait.
 
 Launch a background subagent as a persistent Claude session. The session is saved to disk so the user can inspect progress at any time by opening a new terminal and running `claude --resume <session_id>`.
 
-### 3.1 Prepare
+### 3.1 Atomic Preparation + Launch
 
-1. Generate a UUID for the subagent session. Use `uuidgen` via Bash.
-2. Create the reflections directory: `mkdir -p {project_root}/.reflect/reflections/{reflection_id}`
-3. Initialize `state.json` with `status: "running"` and the session ID:
+All setup steps are merged into a **single Bash call** to eliminate the interruption window where user messages could interleave and cause the subagent to never launch. `bypassPermissions` is applied to this single Bash call for atomicity — not for permission scope.
 
-```json
+```bash
+SESSION_ID=$(uuidgen) && \
+mkdir -p {project_root}/.reflect/reflections/{reflection_id} && \
+cat > {project_root}/.reflect/reflections/{reflection_id}/state.json << 'EOF'
 {
   "id": "{reflection_id}",
   "status": "running",
-  "session_id": "{generated_uuid}",
-  "category": null,
-  "severity": null,
+  "session_id": "$SESSION_ID",
   "created_at": "{ISO_timestamp}",
   "error_claim": "{error_claim_summary}",
   "correction": "{correction_summary}"
 }
-```
-
-### 3.2 Write Subagent Prompt to Temp File
-
-Write the filled-in SUBAGENT_PROMPT (with all `{variables}` replaced) to a temp file. Use Bash heredoc to avoid path mapping issues:
-
-```bash
-cat > /c/tmp/reflect-{reflection_id}-prompt.txt << 'PROMPT_EOF'
+EOF
+cat > {project_root}/.reflect/reflections/{reflection_id}/prompt.txt << 'PROMPT_EOF'
 {filled_subagent_prompt}
 PROMPT_EOF
-```
-
-Note: On Windows with Git Bash, use `/c/tmp/` not `/tmp/` to ensure both Write tool and Bash reference the same path.
-
-### 3.3 Launch Background Claude Process
-
-Execute the subagent in background:
-
-```bash
-claude -p "$(cat /c/tmp/reflect-{reflection_id}-prompt.txt)" \
-  --session-id {session_uuid} \
-  --permission-mode bypassPermissions \
+claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
+  --session-id $SESSION_ID \
   --output-format json \
-  2>/c/tmp/reflect-{reflection_id}-stderr.log
+  2>{project_root}/.reflect/reflections/{reflection_id}/stderr.log &
+echo $SESSION_ID
 ```
 
 Launch via Bash with `run_in_background=true`.
 
-Key flags:
-- `--session-id {uuid}`: Creates a persistent, resumable session
-- `--permission-mode bypassPermissions`: Bypasses safety classifier (subagent prompt has self-imposed path restrictions)
-- `--output-format json`: Returns structured result (one-line summary from subagent)
-- `2>stderr.log`: Captures errors for debugging
+Key design points:
+- **Single Bash call**: produces at most one permission confirmation in `ask` mode; `bypassPermissions` on this call eliminates even that, ensuring atomic execution
+- **`--session-id`**: Creates a persistent, resumable session
+- **No `--permission-mode` on subagent**: The subagent writes only to project root — no elevated access needed. Avoids the confirmed bug where subagents with `bypassPermissions` are denied access outside project root
+- **`--output-format json`**: Returns structured result (one-line summary from subagent)
+- **`2>stderr.log`**: Captures errors for debugging
+- **Background (`&`)**: Subagent runs independently; main conversation continues immediately
+- **All paths in project root**: prompt.txt and stderr.log stored in the reflection staging directory, avoiding cross-platform temp path issues (no /tmp/ or /c/tmp/ dependency)
 
-### 3.4 After Launch
+### 3.2 After Launch
 
 After launching the subagent:
-1. Save the session UUID in `state.json` (already done in 3.1)
+1. The session UUID is echoed by the atomic Bash command — capture it
 2. Inform the user: "Reflection `{reflection_id}` launched in background. Inspect progress: `claude --resume {session_uuid}`"
 3. Respond to the user normally — the subagent runs independently
 
 When the subagent completes, a `<task-notification>` will appear automatically.
 
-### 3.5 Inspect Mode (User-Initiated)
+### 3.3 Inspect Mode (User-Initiated)
 
 When the user invokes `/reflect inspect <id>`:
 
@@ -159,19 +146,17 @@ When the user invokes `/reflect inspect <id>`:
 2. If `status: "running"`, show the user:
    - Session UUID
    - How to resume: `claude --resume {session_uuid}`
-   - How to check logs: `cat /c/tmp/reflect-{id}-stderr.log`
+   - How to check logs: `cat {project_root}/.reflect/reflections/{id}/stderr.log`
    - Whether partial files exist (check if `report.md` exists)
 3. If `status: "pending_review"`, suggest the user run `/reflect review <id>`
 
-### 3.6 Error Handling
+### 3.4 Error Handling
 
 If the background task fails (detected via `<task-notification>` with `status: failed`):
 
-1. Read the stderr log: `/c/tmp/reflect-{id}-stderr.log`
+1. Read the stderr log: `{project_root}/.reflect/reflections/{id}/stderr.log`
 2. Read the task output file for the error message
 3. **Classify the error**:
-   - **Classifier unavailability**: Message contains "temporarily unavailable" + "auto mode cannot"
-     → Should not happen with `bypassPermissions`. If it does, report to user as a platform issue.
    - **API connectivity**: Message contains "ECONNRESET", "ECONNREFUSED", "timeout", or "Unable to connect"
      → Transient network issue. Offer retry immediately with a new session UUID.
    - **Rate limit**: Message contains "rate limit", "quota", or "429"
@@ -190,14 +175,13 @@ Do NOT include the full report content, Do NOT include draft artifact text. Just
 
 ## Path Restrictions (MANDATORY)
 
-You MUST ONLY write files to these locations:
-1. `{project_root}/.reflect/reflections/{reflection_id}/` — reflection reports and state
-2. Memory directories under `~/.claude/projects/` — feedback memory files
+You MUST ONLY write files to:
+1. `{project_root}/.reflect/reflections/{reflection_id}/` — ALL output goes here, including drafts
 
-You MUST NOT:
-- Write to any path outside the project root or user memory directories
-- Execute destructive commands (rm -rf, git push --force, git reset --hard)
-- Modify `.git/`, `CLAUDE.md`, or any configuration file
+You MUST NOT write to:
+- `~/.claude/` or any path outside the project root
+- `.git/`, `CLAUDE.md`, or any configuration file
+- Destructive commands: `rm -rf`, `git push --force`, `git reset --hard`
 - Install packages or make network requests
 
 ## Error Context
@@ -228,6 +212,28 @@ Write out:
 - Reasoning chain (2-3 steps that led to the error)
 - Prevention recommendation (specific, actionable)
 
+## Task A2: Scope Judgment
+
+For each artifact you will draft in Task C, determine its scope:
+
+- **user-level**: error reflects a general knowledge gap, language/API misunderstanding, or conceptual error that applies regardless of project
+- **project-level**: error reflects missing project-specific context, codebase conventions, or domain constraints specific to this repository
+
+Default scope by root cause category:
+- Stale Knowledge → user-level
+- Wrong Abstraction → user-level
+- Assumption Error → evaluate: is the assumption project-specific? If yes → project-level
+- Context Gap → project-level
+- Scope Mismatch → project-level
+- Under-Specification → project-level
+- Over-Engineering → evaluate: is this a general tendency? If yes → user-level
+
+You MUST provide for each artifact:
+- `scope`: "user-level" or "project-level"
+- `scope_reasoning`: one sentence explaining why
+
+Record scope and scope_reasoning in both report.md and state.json.
+
 ## Task B: Severity Classification
 
 Rate the error severity:
@@ -239,7 +245,7 @@ Rate the error severity:
 
 ## Task C: Draft Memory Artifacts
 
-Draft artifacts based on severity. Do NOT write to final locations. Save everything to the report.
+Draft artifacts based on severity. Save all draft content to `report.md` ONLY. Do NOT write artifact files to their final locations — target paths listed in each draft are for display at review time only. Actual writes happen after user approval in the interactive review session.
 
 ### C1: Reflection Report (required for all severities)
 
@@ -274,6 +280,8 @@ Use this exact format:
 ## Drafted Memory Artifacts
 
 ### Draft 1: Claude Code Feedback Memory
+- Scope: USER-LEVEL (or PROJECT-LEVEL)
+- Scope reasoning: {one sentence explaining why this scope}
 - Target: ~/.claude/projects/{project_hash}/memory/feedback_{topic}.md
 - Content:
 ---
@@ -288,7 +296,7 @@ type: feedback
 
 **How to apply:** {when_and_where_to_apply_this_lesson}
 
-### Draft 2: ... (additional drafts based on severity)
+### Draft 2: ... (additional drafts based on severity, each with Scope + Scope reasoning)
 ```
 
 ### C2: Additional Drafts by Severity
@@ -296,13 +304,13 @@ type: feedback
 **All severities** get at least Draft 1 (Claude Code feedback memory).
 
 **Important+ severity** also drafts:
-- A project-level factual note to `.reflect/project-memory.json`
+- A project-level factual note (Scope: PROJECT-LEVEL) to `.reflect/project-memory.json`
 
 **Critical severity** also drafts:
-- A high-priority session note to `.reflect/notifications.md`
+- A high-priority session note (Scope: PROJECT-LEVEL) to `.reflect/notifications.md`
 
 **If the correction reveals a reusable, non-Googleable, codebase-specific pattern** (quality gate: Could someone Google this in 5 minutes? No. Is this specific to THIS codebase? Yes. Did this take real debugging effort? Yes.), also draft:
-- A learned skill file for `.reflect/skills/{skill-name}.md`
+- A learned skill file (Scope: PROJECT-LEVEL) for `.reflect/skills/{skill-name}.md`
 
 
 
@@ -314,22 +322,31 @@ type: feedback
   "id": "{reflection_id}",
   "status": "pending_review",
   "session_id": "{session_uuid}",
+  "created_at": "{ISO_timestamp}",
   "category": "{category}",
   "severity": "{severity}",
-  "created_at": "{ISO_timestamp}",
   "error_claim": "{error_claim_summary}",
-  "correction": "{correction_summary}"
+  "correction": "{correction_summary}",
+  "artifacts": [
+    {
+      "id": "artifact-001",
+      "type": "feedback_memory",
+      "scope": "user-level",
+      "scope_reasoning": "{one_sentence_explanation}",
+      "name": "{artifact_name}",
+      "target_path": "~/.claude/projects/{project_hash}/memory/feedback_{topic}.md",
+      "content": "{artifact_content}"
+    }
+  ]
 }
 ```
 
-2. Use the Write tool to write a persistent notification to `.reflect/notifications.md`:
+2. Use the Write tool to write a persistent notification to `{project_root}/.reflect/notifications.md`:
 ```
 [Reflection complete ID:{reflection_id}] Root cause: {category} | Severity: {severity} | Enter /claude-code-reflect:reflect review {reflection_id} to review drafts and approve memory artifacts
 ```
 
-3. Create the reflections directory if it does not exist.
-
-4. IMPORTANT: Return ONLY a one-line summary: "Reflection {reflection_id} complete. Root cause: {category}. {N} memory drafts saved." Do NOT include full report or draft content in your return value — all content is already saved to files.
+3. IMPORTANT: Return ONLY a one-line summary: "Reflection {reflection_id} complete. Root cause: {category}. {N} memory drafts saved." Do NOT include full report or draft content in your return value — all content is already saved to files.
 
 </SUBAGENT_PROMPT>
 
@@ -352,7 +369,14 @@ Present the reflection report to the user in a clear format:
 1. **Root Cause Analysis** — category, root cause, reasoning chain
 2. **Prevention recommendation**
 3. **Severity rating**
-4. **Drafted memory artifacts** — list each draft with its target location and content
+4. **Drafted memory artifacts** — for each artifact, display:
+
+```
+[artifact-001] {artifact_name}
+Scope:         {USER-LEVEL or PROJECT-LEVEL}
+Reason:        {scope_reasoning}
+Target:        {target_path}
+```
 
 Keep the display concise. Show full artifact content only for artifacts the user asks about.
 
@@ -360,14 +384,20 @@ Keep the display concise. Show full artifact content only for artifacts the user
 
 Use AskUserQuestion with these options:
 
-- **Approve all** — Write all drafted artifacts to final locations (proceed to Step 5)
+- **Approve all** — Write all drafted artifacts to their target locations (proceed to Step 5)
 - **Approve with modifications** — User describes what to change, then write modified versions (proceed to Step 5)
+- **Change scope** — User changes one or more artifacts between user-level and project-level. Update target path accordingly:
+  - user-level → project-level: target changes from `~/.claude/projects/.../memory/` to `.reflect/project-memory.json`
+  - project-level → user-level: target changes from `.reflect/...` to `~/.claude/projects/.../memory/`
+  - Update `state.json` artifact entries with new scope before writing
 - **Re-analyze** — User provides additional context, launch new subagent with `--deep` flag (loop to Step 3)
 - **Discard** — Delete the reflection drafts and state file, no artifacts written
 
 ## Step 5: Commit Artifacts (Write to Final Locations)
 
-After user approval, write each approved draft to its final location:
+After user approval, write each approved draft to its final location. **All writes execute in the interactive (resumed) session** — this is the natural execution boundary where `~/.claude/` writes work without special permissions.
+
+Read target paths from `state.json` artifacts array (not hardcoded paths), then write:
 
 | Draft Type | Write Method | Final Location |
 |------------|-------------|----------------|
@@ -381,34 +411,32 @@ If a Claude Code feedback memory was written, also update `MEMORY.md` index in t
 
 ### Cleanup
 
-1. Update `state.json` status to `"approved"` or `"approved_with_modifications"`
-2. Use the Write tool to remove or update the review notification (replace with a brief "Reflection {id} artifacts committed" note)
+1. Update `state.json`: set `status` to `"approved"` (or `"approved_with_modifications"`), add `approved_at` timestamp, set each artifact's `status` to `"written"` and record `final_path`
+2. Overwrite `.reflect/notifications.md` with a brief "Reflection {id} artifacts committed." message
 3. Do NOT delete the report.md — it serves as a historical record
 
 </Steps>
 
 <Tool_Usage>
 ```bash
-# Step 3.1: Generate session UUID and initialize state
-SESSION_ID=$(uuidgen)
-mkdir -p {project_root}/.reflect/reflections/{reflection_id}
-# Write state.json with status: "running" and session_id
-
-# Step 3.2: Write prompt to temp file (use /c/tmp/ on Windows)
-cat > /c/tmp/reflect-{reflection_id}-prompt.txt << 'PROMPT_EOF'
+# Step 3.1: Atomic preparation + launch (single Bash call)
+SESSION_ID=$(uuidgen) && \
+mkdir -p {project_root}/.reflect/reflections/{reflection_id} && \
+cat > {project_root}/.reflect/reflections/{reflection_id}/state.json << 'EOF'
+{state_json_content}
+EOF
+cat > {project_root}/.reflect/reflections/{reflection_id}/prompt.txt << 'PROMPT_EOF'
 {filled_subagent_prompt}
 PROMPT_EOF
-
-# Step 3.3: Launch background Claude session
-claude -p "$(cat /c/tmp/reflect-{reflection_id}-prompt.txt)" \
-  --session-id {session_uuid} \
-  --permission-mode bypassPermissions \
+claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
+  --session-id $SESSION_ID \
   --output-format json \
-  2>/c/tmp/reflect-{reflection_id}-stderr.log
+  2>{project_root}/.reflect/reflections/{reflection_id}/stderr.log &
+echo $SESSION_ID
 
-# Step 3.5: User inspects subagent progress
+# Step 3.3: User inspects subagent progress
 claude --resume {session_uuid}
-cat /c/tmp/reflect-{reflection_id}-stderr.log
+cat {project_root}/.reflect/reflections/{id}/stderr.log
 ```
 
 ```python
@@ -427,10 +455,10 @@ Write(file_path=".reflect/notifications.md", content=...)
 
 <Examples>
 <Good>
-Complete async review flow with session inspection:
+Complete async review flow with scope display:
 ```
 [Turn 1] User: 不对，这个 API 的参数应该是 callback 而不是 promise
-[Turn 1] Claude: 感谢纠正！[detects correction → launches background session]
+[Turn 1] Claude: 感谢纠正！[detects correction → atomic preparation → launches background session]
 [Turn 1] Claude: Reflection ref-20260404a launched. Inspect: claude --resume {uuid}
 [Turn 1] Claude: [main conversation continues normally]
 
@@ -438,12 +466,20 @@ Complete async review flow with session inspection:
 $ claude --resume {uuid}
 [Sees subagent's full RCA work in progress]
 
-[Background completes] Notepad notification: "[Reflection complete ID:ref-20260404a]..."
+[Background completes] Notification: "[Reflection complete ID:ref-20260404a]..."
 
 [Turn 3] User: /claude-code-reflect:reflect review ref-20260404a
-[Turn 3] Claude: [reads report, displays RCA + drafted artifacts]
-[Turn 3] User: 确认，全部写入
-[Turn 3] Claude: [writes all artifacts to final locations]
+[Turn 3] Claude: [reads report + state.json, displays]
+  Root Cause: Wrong Abstraction
+  Severity: Important
+
+  [artifact-001] callback-vs-promise
+  Scope:   USER-LEVEL
+  Reason:  Language-level misunderstanding, not project-specific
+  Target:  ~/.claude/projects/.../memory/feedback_callback-vs-promise.md
+
+[Turn 3] User: Approve all
+[Turn 3] Claude: [writes all artifacts to final locations in interactive session]
 ```
 </Good>
 
@@ -455,19 +491,24 @@ User inspects stuck subagent:
   Status: running
   Session UUID: {uuid}
   Resume: claude --resume {uuid}
-  Error log: [shows stderr contents]
+  Error log: [shows stderr from .reflect/reflections/{id}/stderr.log]
   Partial files: report.md exists (subagent started writing)
 [Turn 2] Claude: Subagent appears to be running. Check logs or wait for completion.
 ```
 </Good>
 
 <Good>
-User modifies before approving:
+User changes scope before approving:
 ```
 [Turn 5] User: /claude-code-reflect:reflect review ref-20260404a
-[Turn 5] Claude: [displays results]
-[Turn 5] User: 根因分析没问题，但记忆文档要加一条：这个项目用的是 v2.x 不是 v3.x
-[Turn 5] Claude: [modifies drafts based on feedback → writes modified versions to final locations]
+[Turn 5] Claude: [displays results with scope per artifact]
+  [artifact-001] go-append-isolation
+  Scope:   USER-LEVEL
+  Reason:  Go language semantics, applies globally
+  Target:  ~/.claude/projects/.../memory/feedback_go-append.md
+[Turn 5] User: Change scope — this project has a custom slice wrapper, make it project-level
+[Turn 5] Claude: [updates scope to project-level, changes target to .reflect/project-memory.json,
+                  updates state.json artifact entry, writes modified version]
 ```
 </Good>
 
@@ -477,7 +518,7 @@ Background task fails with clear error:
 [task-notification: status=failed]
 [Turn 2] Claude: Reflection ref-20260404a failed.
   Error: API Error: Unable to connect to API (ECONNRESET)
-  Stderr log: /c/tmp/reflect-ref-20260404a-stderr.log
+  Stderr log: {project_root}/.reflect/reflections/ref-20260404a/stderr.log
   Partial files: none
   Options: [Retry] [Inline fallback] [Discard]
 ```
@@ -516,21 +557,22 @@ Why bad: User and main agent are blind to subagent state. Cannot distinguish "st
 - If the reflection report file does not exist when reviewing, list available reflections and ask the user to pick one
 - If the user provides contradictory feedback across multiple review rounds, ask for clarification before proceeding
 - If the subagent fails 3 times in a row, report the issue to the user and suggest running `/reflect` manually with explicit context
-- If `bypassPermissions` mode also fails, offer inline execution as fallback (run RCA directly in main conversation instead of background subagent)
+- If the subagent keeps failing, offer inline execution as fallback (run RCA directly in main conversation instead of background subagent)
 - If `.reflect/reflections/` accumulates more than 20 pending reflections, suggest the user review or clean up old ones
 - If the subagent appears stuck, the user can inspect via `/reflect inspect <id>` or `claude --resume <session_uuid>`
 </Escalation_And_Stop_Conditions>
 
 <Final_Checklist>
 - [ ] Correction signal detected from conversation (or user provided explicit context)
+- [ ] Preparation completed atomically (single Bash call with bypassPermissions for atomicity)
 - [ ] Session UUID generated and saved to state.json
-- [ ] Background Claude session launched with --session-id and --permission-mode bypassPermissions
-- [ ] Reflection report saved to `.reflect/reflections/{id}/report.md`
-- [ ] State file updated to `pending_review`
+- [ ] Background Claude session launched with --session-id (no --permission-mode flag on subagent)
+- [ ] Reflection report saved to `.reflect/reflections/{id}/report.md` with scope judgments per artifact
+- [ ] State file updated to `pending_review` with artifacts array (scope/scope_reasoning per artifact)
 - [ ] Notification file written to `.reflect/notifications.md` with review instructions
-- [ ] User reviewed reflection report
-- [ ] User approved artifacts (or approved with modifications)
-- [ ] All approved artifacts written to final locations
+- [ ] User reviewed reflection report with scope display per artifact
+- [ ] User approved artifacts (or approved with modifications or scope override)
+- [ ] All approved artifacts written to final locations in interactive (resumed) session
 - [ ] MEMORY.md index updated if feedback memory was written
 - [ ] State file updated to `approved`
 - [ ] Review notification cleaned up from `.reflect/notifications.md`
@@ -539,7 +581,7 @@ Why bad: User and main agent are blind to subagent state. Cannot distinguish "st
 <Advanced>
 ## Integration with Other Skills
 
-This standalone version does not delegate to OMC skills. All artifact writing is done directly with the Write tool.
+This standalone version does not delegate to OMC skills. All artifact writing is done directly with the Write tool. Compatible with OMC — each system manages its own data directory (`.reflect/` vs `.omc/`).
 
 | Scenario | Action | Reason |
 |----------|--------|--------|
@@ -553,11 +595,10 @@ When a background subagent fails or appears stuck:
 
 1. **Check state**: Read `.reflect/reflections/{id}/state.json` — is status "running"?
 2. **Resume session**: `claude --resume {session_uuid}` — see the subagent's full conversation
-3. **Check stderr**: `cat /c/tmp/reflect-{id}-stderr.log` — API errors, permission issues
+3. **Check stderr**: `cat {project_root}/.reflect/reflections/{id}/stderr.log` — API errors, permission issues
 4. **Check partial output**: Does `report.md` exist? Is it complete or truncated?
 5. **Check task output**: Read the Bash task output file for the subagent's return value
-6. **Classifier unavailability**: If errors mention "temporarily unavailable", the internal safety classifier was down. This should be resolved by `bypassPermissions` mode — verify the launch command uses it.
-7. **Fallback**: If subagent keeps failing, offer inline execution as fallback
+6. **Fallback**: If subagent keeps failing, offer inline execution as fallback
 
 ## Future Enhancements
 

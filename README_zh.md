@@ -19,42 +19,14 @@
 
 ## 安装
 
-本插件有两个分支，依赖要求不同：
-
-| 分支 | 需要 OMC | 安装命令 |
-|------|---------|---------|
-| main | 是 | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect` |
-| standalone | 否 | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect`（然后切换分支） |
-
-### 方式 A：配合 oh-my-claudecode（main 分支，推荐）
-
-使用 OMC 的 MCP 工具实现跨 compaction 通知和项目记忆集成。
-
-```
-# 1. 先安装 oh-my-claudecode
-/plugin marketplace add https://github.com/Yeachan-Heo/oh-my-claudecode
-/plugin install oh-my-claudecode
-
-# 2. 安装 reflect（main 分支，默认）
-/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
-/plugin install claude-code-reflect
-
-# 3. 完全重启 Claude Code（不是 /reload-plugins）
-```
-
-### 方式 B：独立安装（standalone 分支）
-
-将所有 OMC 依赖替换为直接文件操作，不需要安装 OMC，但会失去跨 compaction 通知可靠性和跨技能委托能力。
-
 ```
 /plugin marketplace add https://github.com/alexwwang/claude-code-reflect
 /plugin install claude-code-reflect
-# 然后手动切换到 standalone 分支：
-cd ~/.claude/plugins/cache/claude-code-reflect/claude-code-reflect/0.1.0/claude-code-reflect && git checkout standalone
 # 完全重启 Claude Code（不是 /reload-plugins）
 ```
 
-详见下方[分支对比](#分支对比)。
+> **注意：** 仅维护 `standalone` 分支。`main`（依赖 OMC）分支已废弃。
+> 本插件与 oh-my-claudecode 完全兼容——各系统管理各自的数据目录（`.reflect/` vs `.omc/`），`~/.claude/projects/*/memory/` 中的反馈记忆使用 Claude Code 原生格式，两个系统都能识别。
 
 ## 使用方法
 
@@ -76,7 +48,7 @@ cd ~/.claude/plugins/cache/claude-code-reflect/claude-code-reflect/0.1.0/claude-
 /claude-code-reflect:reflect review ref-20260404a
 ```
 
-你可以全部批准、修改后批准、提供更多上下文重新分析、或放弃。
+你可以全部批准、修改后批准、变更范围、提供更多上下文重新分析、或放弃。
 
 ### 检查进度
 
@@ -112,11 +84,11 @@ You: /claude-code-reflect:reflect
 
 # 预期流程：
 # 1. Claude 检测到 "不对" 作为直接否定信号
-# 2. Claude 启动后台会话，告诉你 session UUID
+# 2. Claude 执行原子准备并启动后台会话，告诉你 session UUID
 # 3. 主对话正常继续
 # 4. 后台完成后你收到通知
 # 5. 运行：/claude-code-reflect:reflect review ref-xxxxxxxx
-# 6. 你看到 RCA 报告和草拟的记忆文档
+# 6. 你看到 RCA 报告和带范围判断的草拟记忆文档
 ```
 
 **测试 3：英文纠正端到端测试**
@@ -137,13 +109,13 @@ You: /claude-code-reflect:reflect
 # 预期：Claude 展示：
 #   - 根因分析（类别、推理链）
 #   - 严重度评级
-#   - 草拟的记忆文档及目标路径
-#   - 选项：全部批准 / 修改后批准 / 重新分析 / 放弃
+#   - 草拟的记忆文档，含范围判断（USER-LEVEL 或 PROJECT-LEVEL）、理由和目标路径
+#   - 选项：全部批准 / 修改后批准 / 变更范围 / 重新分析 / 放弃
 ```
 
 **检查输出是否正确：**
-- .omc/reflections/ref-xxxxxxxx/report.md 存在且包含完整 RCA
-- .omc/reflections/ref-xxxxxxxx/state.json 显示 status: "pending_review"
+- .reflect/reflections/ref-xxxxxxxx/report.md 存在且包含完整 RCA
+- .reflect/reflections/ref-xxxxxxxx/state.json 显示 status: "pending_review"，artifacts 数组包含 scope 和 scope_reasoning
 - 批准后，反馈记忆文件存在于 ~/.claude/projects/*/memory/
 
 ## 你会看到什么
@@ -168,10 +140,10 @@ You: /claude-code-reflect:reflect
 ## 严重度: Important
 
 ## 草拟文档
-1. [反馈记忆] go-append-slice-isolation
-   目标: ~/.claude/projects/.../memory/feedback_go-append-isolation.md
-   规则: Go 中 append() 可能复用现有底层数组。
-   只有 copy() 或显式分配才能保证隔离。
+[artifact-001] go-append-slice-isolation
+范围:   用户级（USER-LEVEL）
+理由:   Go 语言语义错误，跨项目适用
+目标:   ~/.claude/projects/.../memory/feedback_go-append-isolation.md
 ```
 
 ### 反馈记忆（批准后）
@@ -199,7 +171,7 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 ### 使用后的文件结构
 
 ```
-.omc/reflections/
+.reflect/reflections/
   ref-20260404a/
     report.md       <- 完整 RCA 报告 + 草拟文档
     state.json      <- 状态: pending_review -> approved
@@ -215,27 +187,29 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 ## 工作原理
 
 ```
-第 1 轮: 用户纠正 Claude -> /reflect -> 检测 + 启动后台任务
+第 1 轮: 用户纠正 Claude -> /reflect -> 检测 + 原子准备 + 后台启动
 第 1 轮: 主对话正常继续
-   ...后台 subagent 执行 RCA，写入 report.md + state.json...
-第 2+ 轮: 用户运行 /reflect review ref-xxxx -> 查看 RCA + 草稿 -> 批准 -> 写入记忆
+   ...后台 subagent 执行 RCA，仅写入暂存目录 (.reflect/reflections/{id}/)...
+第 2+ 轮: 用户运行 /reflect review ref-xxxx -> 查看 RCA + 带范围判断的草稿 -> 批准 -> 写入记忆
 ```
 
 后台 subagent 以持久 Claude 会话方式运行（`claude --session-id`）。你可以随时打开新终端运行 `claude --resume <session_uuid>` 查看进度。
 
 ### 权限与安全模型
 
-后台 subagent 使用 `--permission-mode bypassPermissions` 而非 `auto`。这是必要的，因为：
+本技能使用三阶段权限设计：
 
-- `auto` 模式依赖内部安全分类器模型，该模型可能临时不可用，导致所有工具调用被阻塞，subagent 完全卡住
-- 后台 subagent 无法交互式地向用户请求权限
-- subagent 执行的是有边界的、用户主动发起的任务，提示词范围明确
+| 阶段 | 会话类型 | `bypassPermissions` | 写入位置 |
+|------|---------|---------------------|---------|
+| 准备 | 主会话（单次原子 Bash） | 是 — 保证原子性 | 仅 `.reflect/reflections/` |
+| 后台分析 | 后台 subagent | 否 | 仅 `.reflect/reflections/{id}/` |
+| 审查 + 写入 | 交互式（恢复的）会话 | 否 | `.reflect/` + `~/.claude/` |
 
-为补偿跳过平台级安全检查，subagent 提示词内置了**强制路径限制**：
+**准备阶段为何使用 `bypassPermissions`：** 准备阶段（uuidgen、mkdir、写 state.json、写 prompt、启动 subagent）合并为单次 Bash 调用。不使用 `bypassPermissions` 时，此调用在 `ask` 模式下会产生确认提示，制造中断窗口——用户的新消息可能穿插进来，导致 subagent 永远不会启动。由于所有操作都在项目根目录内（mkdir、文件写入），没有实质性的安全风险。
 
-- 文件只能写入 `.reflect/reflections/{id}/` 和用户记忆目录
-- 禁止执行破坏性命令（`rm -rf`、`git push --force` 等）
-- 禁止修改 `.git/`、`CLAUDE.md` 或配置文件
+**subagent 为何不使用 `bypassPermissions`：** subagent 仅写入项目根目录——不需要提升权限。这避免了一个已确认的 Claude Code bug：使用 `bypassPermissions` 的后台 subagent 会被静默拒绝访问项目根目录之外的路径。
+
+**范围判断：** 分析阶段，模型会判断每个 artifact 是**用户级**（通用知识错误，跨项目适用）还是**项目级**（代码库特定上下文）。你在审查时会看到判断理由，可以在写入前覆盖。
 
 ### 错误处理
 
@@ -255,58 +229,51 @@ Go 中 append() 在容量足够时可能复用现有底层数组。
 | /reflect review ref-xxxx | 后台完成后 | 展示 RCA + 草拟文档，请求批准 |
 | /reflect inspect ref-xxxx | 后台运行中 | 展示会话状态、日志、调试方法 |
 
-## 分支对比
+## 分支状态
 
-| 特性 | main（OMC 版） | standalone（独立版） |
-|------|-----------------|---------------------|
-| 需要 OMC | 是 | 否 |
-| 跨 compaction 通知 | notepad_write_priority MCP | 文件写入（.reflect/notifications.md） |
-| 项目记忆 | project_memory_add_note MCP | 文件写入（.reflect/project-memory.json） |
-| 跨技能委托 | /learner、/remember | 已移除 |
-| 数据目录 | .omc/reflections/ | .reflect/reflections/ |
-| Claude Code 原生记忆 | 支持 | 支持 |
-
-> **注意：** 本文档中的示例路径使用 main 分支的 `.omc/` 目录（如 `.omc/reflections/`）。在 standalone 分支上，所有数据存储在 `.reflect/` 目录下（如 `.reflect/reflections/`、`.reflect/notifications.md`、`.reflect/project-memory.json`）。
+> **`standalone` 是唯一维护的分支。** `main`（依赖 OMC）分支已废弃，不再更新。
+>
+> 本插件与 oh-my-claudecode 无冲突地共存。各系统管理各自的数据目录（`.reflect/` vs `.omc/`），`~/.claude/projects/*/memory/` 中的反馈记忆使用 Claude Code 原生格式，两个系统都能识别。
 
 ## 待改善项
 
 以下问题在实际测试中发现，待后续改进。
 
-1. **多步流程缺乏原子性保护**
-
-   首次调用 `/reflect` 时，准备阶段（UUID 生成、mkdir、prompt 写入、subagent 启动）涉及多个顺序步骤。如果用户在流程中途插入新请求，整个过程可能被静默放弃，subagent 始终未启动。
-
-   *改进方向：* 将准备阶段合并为单次原子操作，或设置不可中断保护，确保所有步骤完成后才能响应用户。
-
-2. **Subagent 模型配置缺失**
+1. **Subagent 模型配置缺失**
 
    启动 subagent 的 `claude -p` 命令未指定模型参数，可能使用默认模型而非主 session 的当前模型。
 
    *改进方向：* SKILL.md 中应指导从主 session 获取当前模型 ID，通过 `--model` 参数传递给 subagent。
 
-3. **重试时 Session ID 冲突**
+2. **重试时 Session ID 冲突**
 
    subagent 启动失败后重试时，可能复用已注册的 session UUID，导致 `claude --resume` 行为不确定。
 
    *改进方向：* 每次重试（包括 `--deep` 重分析）必须生成新的 UUID，并在 `state.json` 中更新。
 
-4. **Read 工具渲染与实际文件内容不一致**
+3. **Read 工具渲染与实际文件内容不一致**
 
    验证含 markdown 语法的文件（尤其是反引号代码块）时，Read 工具可能因嵌套 markdown 解析而渲染异常。磁盘上的实际文件内容是正确的——这是显示问题，不是数据损坏。
 
    *改进方向：* SKILL.md 中应提醒 subagent，验证含 markdown 语法的文件时使用 `Bash cat` 而非 Read 工具。
 
-5. **错误恢复选项不充分**
+4. **错误恢复选项不充分**
 
    subagent 启动失败后，当前选项为"重试/内联回退/放弃"，未覆盖部分文件已写入的中间状态（如 `report.md` 已存在但 `state.json` 未更新）。
 
    *改进方向：* 增加"检查部分结果"选项，检测并利用已存在的部分文件继续完成操作。
 
-6. **跨 Compaction 通知可靠性**
+5. **跨 Compaction 通知可靠性**
 
-   standalone 分支使用文件写入（`.reflect/notifications.md`）替代 OMC MCP 工具。文件通知无法在 context compaction 后自动注入上下文。
+   standalone 分支使用文件写入（`.reflect/notifications.md`）。文件通知无法在 context compaction 后自动注入上下文。
 
    *改进方向：* 考虑在 SKILL.md 中增加 post-compaction 检查机制（如读取 `state.json` 扫描 `pending_review` 状态）。
+
+### 已解决的问题
+
+- ~~**后台 subagent 写入路径 bug**~~ — 通过写入路径重设计（v3）已解决。后台 subagent 现在仅写入项目内暂存目录。所有最终写入在交互式审查会话中执行，`~/.claude/` 访问正常。
+
+- ~~**多步流程缺乏原子性保护**~~ — 通过将所有准备步骤合并为单次原子 Bash 命令已解决。步骤之间不再存在中断窗口。
 
 ## 迭代改进
 
@@ -348,12 +315,7 @@ cat skills/reflect/tests/TEST_PLAN.md
 ```bash
 git clone https://github.com/alexwwang/claude-code-reflect.git
 cd claude-code-reflect
-
-# 主分支（需要 OMC）
-git checkout main
-
-# 独立分支（不需要 OMC）
-git checkout standalone
+# standalone 是默认活动分支
 ```
 
 ## 许可证

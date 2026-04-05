@@ -19,42 +19,14 @@ The analysis uses a structured root cause taxonomy: Assumption Error, Context Ga
 
 ## Installation
 
-This plugin has two branches with different dependency requirements:
-
-| Branch | OMC Required | Install Command |
-|--------|-------------|-----------------|
-| `main` | Yes | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect` |
-| `standalone` | No | `/plugin marketplace add https://github.com/alexwwang/claude-code-reflect` (then switch branch) |
-
-### Option A: With oh-my-claudecode (`main` branch, recommended)
-
-Uses OMC's MCP tools (`notepad_write_priority`, `project_memory_add_note`) for cross-compaction notifications and project memory integration.
-
-```
-# 1. Install oh-my-claudecode first
-/plugin marketplace add https://github.com/Yeachan-Heo/oh-my-claudecode
-/plugin install oh-my-claudecode
-
-# 2. Install reflect (main branch, default)
-/plugin marketplace add https://github.com/alexwwang/claude-code-reflect
-/plugin install claude-code-reflect
-
-# 3. Restart Claude Code completely (not just /reload-plugins)
-```
-
-### Option B: Standalone (`standalone` branch)
-
-Replaces all OMC dependencies with direct file operations. No OMC needed, but loses cross-compaction notification reliability and cross-skill delegation.
-
 ```
 /plugin marketplace add https://github.com/alexwwang/claude-code-reflect
 /plugin install claude-code-reflect
-# Then manually switch to the standalone branch:
-cd ~/.claude/plugins/cache/claude-code-reflect/claude-code-reflect/0.1.0/claude-code-reflect && git checkout standalone
 # Restart Claude Code completely (not just /reload-plugins)
 ```
 
-See [Branch Comparison](#branch-comparison) for detailed differences.
+> **Note:** Only the `standalone` branch is actively maintained. The `main` (OMC-dependent) branch is deprecated.
+> This plugin is fully compatible with oh-my-claudecode — each system manages its own data directory (`.reflect/` vs `.omc/`) and feedback memories in `~/.claude/projects/*/memory/` use Claude Code's native format recognized by both systems.
 
 ## Usage
 
@@ -76,7 +48,7 @@ When the background analysis completes, review the drafts:
 /claude-code-reflect:reflect review ref-20260404a
 ```
 
-You can approve all, approve with modifications, re-analyze with more context, or discard.
+You can approve all, approve with modifications, change scope, re-analyze with more context, or discard.
 
 ### Inspect Progress
 
@@ -112,11 +84,11 @@ You: /claude-code-reflect:reflect
 
 # Expected flow:
 # 1. Claude detects "That's wrong" as a direct negation signal
-# 2. Claude launches a background session and gives you the session UUID
+# 2. Claude launches a background session (atomic preparation) and gives you the session UUID
 # 3. Main conversation continues normally
 # 4. When background completes, you get a notification
 # 5. Run: /claude-code-reflect:reflect review ref-xxxxxxxx
-# 6. You see the RCA report with drafted memory artifacts
+# 6. You see the RCA report with scope-judged drafted artifacts
 ```
 
 **Test 3: End-to-end flow (English correction)**
@@ -137,13 +109,13 @@ You: /claude-code-reflect:reflect
 # Expected: Claude displays:
 #   - Root Cause Analysis (category, reasoning chain)
 #   - Severity rating
-#   - Drafted memory artifact(s) with target file path
-#   - Options: Approve all / Approve with modifications / Re-analyze / Discard
+#   - Drafted memory artifact(s) with scope (USER-LEVEL or PROJECT-LEVEL), reasoning, and target path
+#   - Options: Approve all / Approve with modifications / Change scope / Re-analyze / Discard
 ```
 
 **What to check in the output:**
-- `.omc/reflections/ref-xxxxxxxx/report.md` exists and contains the full RCA
-- `.omc/reflections/ref-xxxxxxxx/state.json` shows `status: "pending_review"`
+- `.reflect/reflections/ref-xxxxxxxx/report.md` exists and contains the full RCA
+- `.reflect/reflections/ref-xxxxxxxx/state.json` shows `status: "pending_review"` with `artifacts` array containing `scope` and `scope_reasoning` per artifact
 - After approving, feedback memory file exists in `~/.claude/projects/*/memory/`
 
 ## What You'll See
@@ -169,10 +141,10 @@ case and state both branches explicitly.
 ## Severity: Important
 
 ## Drafted Artifacts
-1. [feedback] go-append-slice-isolation
-   Target: ~/.claude/projects/.../memory/feedback_go-append-isolation.md
-   Rule: In Go, append() may reuse the existing underlying array.
-   Only copy() or explicit allocation guarantees isolation.
+1. [artifact-001] go-append-slice-isolation
+   Scope:   USER-LEVEL
+   Reason:  Go language semantics error, applies globally
+   Target:  ~/.claude/projects/.../memory/feedback_go-append-isolation.md
 ```
 
 ### The Feedback Memory (after approval)
@@ -202,7 +174,7 @@ the same error from recurring.
 ### File Layout After Usage
 
 ```
-.omc/reflections/
+.reflect/reflections/
   ref-20260404a/
     report.md       <- Full RCA report + drafted artifacts
     state.json      <- Status: pending_review -> approved
@@ -218,27 +190,29 @@ the same error from recurring.
 ## How It Works
 
 ```
-Turn 1: User corrects Claude -> /reflect -> detection + background launch
+Turn 1: User corrects Claude -> /reflect -> detection + atomic preparation + background launch
 Turn 1: Main conversation continues normally
-   ...background subagent runs RCA, writes report.md + state.json...
-Turn 2+: User runs /reflect review ref-xxxx -> sees RCA + drafts -> approves -> memory written
+   ...background subagent runs RCA, writes ONLY to staging (.reflect/reflections/{id}/)...
+Turn 2+: User runs /reflect review ref-xxxx -> sees RCA + drafts with scope -> approves -> memory written
 ```
 
 The background subagent runs as a persistent Claude session (`claude --session-id`). You can inspect progress at any time by opening a new terminal and running `claude --resume <session_uuid>`.
 
 ### Permission & Safety Model
 
-The background subagent runs with `--permission-mode bypassPermissions` instead of `auto`. This is necessary because:
+The skill uses a three-phase permission design:
 
-- `auto` mode depends on an internal safety classifier model that can be temporarily unavailable, which would block ALL tool calls and leave the subagent stuck
-- Background subagents cannot prompt the user interactively for permissions
-- The subagent runs a bounded, user-initiated task with a tightly-scoped prompt
+| Phase | Session type | `bypassPermissions` | Writes to |
+|-------|-------------|---------------------|-----------|
+| Preparation | main session (1 atomic Bash call) | Yes — atomicity | `.reflect/reflections/` only |
+| Background analysis | background subagent | No | `.reflect/reflections/{id}/` only |
+| Review + write | interactive (resumed) session | No | `.reflect/` + `~/.claude/` |
 
-To compensate for bypassing platform-level safety checks, the subagent prompt includes **mandatory path restrictions**:
+**Why `bypassPermissions` in preparation:** The preparation phase (uuidgen, mkdir, write state.json, write prompt, launch subagent) is merged into a single Bash call. Without `bypassPermissions`, this call produces a confirmation prompt in `ask` mode, creating an interruption window where the user's next message could interleave with the preparation flow, causing the subagent to never launch. Since all operations are within the project root (mkdir, file write) and `/tmp`-equivalent, there is no meaningful security risk.
 
-- Files may ONLY be written to `.reflect/reflections/{id}/` and user memory directories
-- Destructive commands (`rm -rf`, `git push --force`, etc.) are forbidden
-- Modifying `.git/`, `CLAUDE.md`, or config files is forbidden
+**Why NO `bypassPermissions` on the subagent:** The subagent writes only to the project root — no elevated access needed. This avoids a confirmed Claude Code bug where background subagents with `bypassPermissions` are silently denied access to paths outside the project root.
+
+**Scope judgment:** During analysis, the model determines whether each artifact is **user-level** (general knowledge, applies across projects) or **project-level** (codebase-specific context). You see the scope reasoning at review time and can override before any write occurs.
 
 ### Error Handling
 
@@ -258,58 +232,51 @@ If the background subagent fails, the skill classifies the error and offers appr
 | `/reflect review ref-xxxx` | After background completes | Shows RCA + drafted artifacts, asks for approval |
 | `/reflect inspect ref-xxxx` | While background is running | Shows session status, logs, how to debug |
 
-## Branch Comparison
+## Branch Status
 
-| Feature | `main` (OMC) | `standalone` |
-|---------|-------------|-------------|
-| OMC required | Yes | No |
-| Cross-compaction notifications | `notepad_write_priority` MCP | File-based (`.reflect/notifications.md`) |
-| Project memory | `project_memory_add_note` MCP | File-based (`.reflect/project-memory.json`) |
-| Cross-skill delegation | `/learner`, `/remember` | Removed |
-| Data directory | `.omc/reflections/` | `.reflect/reflections/` |
-| Claude Code native memory | Yes | Yes |
-
-> **Note:** Examples in this README use `main` branch paths (`.omc/reflections/`). On the `standalone` branch, all data is stored under `.reflect/` instead (e.g., `.reflect/reflections/`, `.reflect/notifications.md`, `.reflect/project-memory.json`).
+> **`standalone` is the only actively maintained branch.** The `main` (OMC-dependent) branch is deprecated and will not receive further updates.
+>
+> This plugin coexists with oh-my-claudecode without conflicts. Each system manages its own data directory (`.reflect/` vs `.omc/`). Feedback memories in `~/.claude/projects/*/memory/` use Claude Code's native format, recognized by both systems.
 
 ## Known Issues
 
 These issues were identified during real-world testing and are candidates for future improvement.
 
-1. **Multi-step process lacks atomicity**
-
-   When `/reflect` is first invoked, the preparation phase (UUID generation, mkdir, prompt writing, subagent launch) involves multiple sequential steps. If the user interjects with a new request mid-flight, the process can be silently abandoned without the subagent ever launching.
-
-   *Fix direction:* Merge the preparation into a single atomic operation, or add a guard that prevents yielding to the user until all steps complete.
-
-2. **Subagent model configuration missing**
+1. **Subagent model configuration missing**
 
    The `claude -p` command that launches the subagent does not specify a model parameter. This may cause the subagent to use a default model instead of the main session's current model.
 
    *Fix direction:* SKILL.md should guide extracting the current model ID from the main session and passing it via `--model` to the subagent.
 
-3. **Session ID collision on retry**
+2. **Session ID collision on retry**
 
    After a failed subagent launch, a retry may reuse the already-registered session UUID, causing `claude --resume` behavior to be unpredictable.
 
    *Fix direction:* Every retry (including `--deep` re-analysis) must generate a new UUID and update `state.json`.
 
-4. **Read tool rendering vs. actual file content**
+3. **Read tool rendering vs. actual file content**
 
    When verifying files containing markdown syntax (especially backtick code blocks), the Read tool may render content incorrectly due to nested markdown parsing. The actual file on disk is correct — this is a display issue, not data corruption.
 
    *Fix direction:* SKILL.md should remind the subagent to use `Bash cat` instead of the Read tool when verifying files with markdown syntax.
 
-5. **Insufficient error recovery options**
+4. **Insufficient error recovery options**
 
    When the subagent launch fails, the current options are "retry / inline fallback / discard". This doesn't cover intermediate states where partial files exist (e.g., `report.md` written but `state.json` not updated).
 
    *Fix direction:* Add a "check partial results" option that detects and reuses existing partial files to continue the operation.
 
-6. **Cross-compaction notification reliability**
+5. **Cross-compaction notification reliability**
 
-   The standalone branch uses file-based notifications (`.reflect/notifications.md`) instead of the OMC MCP tool. File-based notifications cannot be automatically injected into context after a compaction event.
+   The standalone branch uses file-based notifications (`.reflect/notifications.md`). File-based notifications cannot be automatically injected into context after a compaction event.
 
    *Fix direction:* Consider adding a post-compaction check mechanism in SKILL.md (e.g., reading `state.json` to scan for `pending_review` status).
+
+### Resolved Issues
+
+- ~~**Background subagent write path bug**~~ — Resolved by write path redesign (v3). Background subagent now writes ONLY to project-local staging directory. All final writes occur in the interactive review session where `~/.claude/` access works normally.
+
+- ~~**Multi-step process lacks atomicity**~~ — Resolved by merging all preparation steps into a single atomic Bash command. No interruption window exists between steps.
 
 ## Iterative Development
 
@@ -351,12 +318,7 @@ If you improve the correction detection or RCA quality, consider opening a PR. T
 ```bash
 git clone https://github.com/alexwwang/claude-code-reflect.git
 cd claude-code-reflect
-
-# Main branch (with OMC)
-git checkout main
-
-# Standalone branch (no OMC)
-git checkout standalone
+# standalone is the active branch (default)
 ```
 
 ## License
