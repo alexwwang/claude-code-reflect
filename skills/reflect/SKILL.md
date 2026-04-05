@@ -111,11 +111,24 @@ EOF
 cat > {project_root}/.reflect/reflections/{reflection_id}/prompt.txt << 'PROMPT_EOF'
 {filled_subagent_prompt}
 PROMPT_EOF
-claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
-  --session-id $SESSION_ID \
-  --permission-mode bypassPermissions \
-  --output-format json \
-  2>{project_root}/.reflect/reflections/{reflection_id}/stderr.log &
+(
+  MAX_RETRIES=3
+  RETRY_DELAY=10
+  attempt=0
+  while [ $attempt -lt $MAX_RETRIES ]; do
+    claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
+      --session-id $SESSION_ID \
+      --model ${REFLECT_SUBAGENT_MODEL:-sonnet} \
+      --permission-mode bypassPermissions \
+      --output-format json \
+      2>>{project_root}/.reflect/reflections/{reflection_id}/stderr.log
+    [ $? -eq 0 ] && break
+    attempt=$((attempt + 1))
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Retry $attempt/$MAX_RETRIES after API error" \
+      >> {project_root}/.reflect/reflections/{reflection_id}/stderr.log
+    sleep $RETRY_DELAY
+  done
+) &
 echo $SESSION_ID
 ```
 
@@ -123,10 +136,12 @@ Launch via Bash with `run_in_background=true`.
 
 Key design points:
 - **Single Bash call**: produces at most one permission confirmation in `ask` mode; `bypassPermissions` on this call eliminates even that, ensuring atomic execution
+- **Retry subshell `( ... ) &`**: Wraps `claude -p` in a background subshell with automatic retry on API errors (ECONNRESET). 3 attempts, 10s delay. Logs retry attempts to stderr.log
+- **`--model ${REFLECT_SUBAGENT_MODEL:-sonnet}`**: Configurable model for the subagent. Defaults to `sonnet`. Override by setting `REFLECT_SUBAGENT_MODEL` env var (e.g., `export REFLECT_SUBAGENT_MODEL=opus`). Set in `~/.claude/settings.json` under `env` for persistence.
 - **`--session-id`**: Creates a persistent, resumable session
 - **`--permission-mode bypassPermissions`**: Required for the subagent to write output files (report.md, state.json, notifications.md) without interactive permission prompts. Safe because the subagent is restricted to project root only. Note: Claude Code has a confirmed bug where `bypassPermissions` on subagents silently denies writes outside the project root — this is acceptable since our subagent only writes within `.reflect/reflections/`
 - **`--output-format json`**: Returns structured result (one-line summary from subagent)
-- **`2>stderr.log`**: Captures errors for debugging
+- **`2>>stderr.log`**: Captures errors for debugging (append mode for retry logs)
 - **Background (`&`)**: Subagent runs independently; main conversation continues immediately
 - **All paths in project root**: prompt.txt and stderr.log stored in the reflection staging directory, avoiding cross-platform temp path issues (no /tmp/ or /c/tmp/ dependency)
 
@@ -424,7 +439,7 @@ If a Claude Code feedback memory was written, also update `MEMORY.md` index in t
 
 <Tool_Usage>
 ```bash
-# Step 3.1: Atomic preparation + launch (single Bash call)
+# Step 3.1: Atomic preparation + launch (single Bash call with retry)
 SESSION_ID=$(uuidgen) && \
 mkdir -p {project_root}/.reflect/reflections/{reflection_id} && \
 cat > {project_root}/.reflect/reflections/{reflection_id}/state.json << EOF
@@ -433,11 +448,24 @@ EOF
 cat > {project_root}/.reflect/reflections/{reflection_id}/prompt.txt << 'PROMPT_EOF'
 {filled_subagent_prompt}
 PROMPT_EOF
-claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
-  --session-id $SESSION_ID \
-  --permission-mode bypassPermissions \
-  --output-format json \
-  2>{project_root}/.reflect/reflections/{reflection_id}/stderr.log &
+(
+  MAX_RETRIES=3
+  RETRY_DELAY=10
+  attempt=0
+  while [ $attempt -lt $MAX_RETRIES ]; do
+    claude -p "$(cat {project_root}/.reflect/reflections/{reflection_id}/prompt.txt)" \
+      --session-id $SESSION_ID \
+      --model ${REFLECT_SUBAGENT_MODEL:-sonnet} \
+      --permission-mode bypassPermissions \
+      --output-format json \
+      2>>{project_root}/.reflect/reflections/{reflection_id}/stderr.log
+    [ $? -eq 0 ] && break
+    attempt=$((attempt + 1))
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Retry $attempt/$MAX_RETRIES after API error" \
+      >> {project_root}/.reflect/reflections/{reflection_id}/stderr.log
+    sleep $RETRY_DELAY
+  done
+) &
 echo $SESSION_ID
 
 # Step 3.3: User inspects subagent progress
@@ -572,7 +600,7 @@ Why bad: User and main agent are blind to subagent state. Cannot distinguish "st
 - [ ] Correction signal detected from conversation (or user provided explicit context)
 - [ ] Preparation completed atomically (single Bash call with bypassPermissions for atomicity)
 - [ ] Session UUID generated and saved to state.json
-- [ ] Background Claude session launched with --session-id and --permission-mode bypassPermissions
+- [ ] Background Claude session launched with --session-id, --model ${REFLECT_SUBAGENT_MODEL:-sonnet}, and --permission-mode bypassPermissions (with retry: 3 attempts, 10s delay)
 - [ ] Reflection report saved to `.reflect/reflections/{id}/report.md` with scope judgments per artifact
 - [ ] State file updated to `pending_review` with artifacts array (scope/scope_reasoning per artifact)
 - [ ] Notification file written to `.reflect/notifications.md` with review instructions
